@@ -1,0 +1,407 @@
+blueprint:
+  name: Simple Heating
+  domain: automation
+  description: >
+    Simple heating automation with weekly schedules, Comfort/Eco modes and
+    an optional heating-off period. Controls a thermostat via an input_select
+    and automatically switches temperature and HVAC mode based on a timer.
+
+  input:
+    thermostat:
+      name: Thermostat
+      description: Climate entity that will be controlled by this automation.
+      selector:
+        entity:
+          domain: climate
+    state_helper:
+      name: Comfort/Eco/Off State Selector
+      description: >
+        Input select used to control the heating mode.
+        Must contain the options: Comfort, Eco and Off.
+        Manual changes are applied immediately.
+      selector:
+        entity:
+          domain: input_select
+    plan_timer:
+      name: Plan Timer
+      description: >
+        Timer used internally to schedule the next mode change.
+        The timer will be started automatically.
+        You can pause the timer to disable automatic mode change.
+        Time will be recalculated on restart.
+      selector:
+        entity:
+          domain: timer
+    heat_temp:
+      name: Heating Temperature (Comfort)
+      description: Target temperature when Comfort mode is active.
+      selector:
+        number:
+          min: 5
+          max: 30
+          step: 0.5
+    eco_temp:
+      name: Eco Temperature
+      description: Target temperature when Eco mode is active.
+      selector:
+        number:
+          min: 5
+          max: 30
+          step: 0.5
+    off_start:
+      name: Heating-Free Period - Start Date
+      description: >
+        Start date of the heating-off period.
+        During this time the heating will be forced to Off mode.
+        Year will be ignored, the date will apply to all years.
+      selector:
+        date:
+    off_end:
+      name: Heating-Free Period - End Date
+      description: >
+        End date of the heating-off period.
+        Heating resumes automatically after this date.
+        Year will be ignored, the date will apply to all years.
+      selector:
+        date:
+    monday:
+      name: Monday
+      description: >
+        One or more Comfort time ranges for this day.
+        Each entry defines a start and end time during which
+        Comfort mode is active. Outside these ranges, Eco mode is used.
+      selector:
+        object:
+          label_field: start
+          description_field: end
+          multiple: true
+          fields:
+            start:
+              label: Start
+              required: true
+              selector:
+                time:
+            end:
+              label: End
+              required: true
+              selector:
+                time:
+    tuesday:
+      name: Tuesday
+      description: >
+        Comfort time ranges for this day.
+        Each entry defines a start and end time during which
+        Comfort mode is active. Outside these ranges, Eco mode is used.
+      selector:
+        object:
+          label_field: start
+          description_field: end
+          multiple: true
+          fields:
+            start:
+              label: Start
+              required: true
+              selector:
+                time:
+            end:
+              label: End
+              required: true
+              selector:
+                time:
+    wednesday:
+      name: Wednesday
+      description: >
+        Comfort time ranges for this day.
+        Each entry defines a start and end time during which
+        Comfort mode is active. Outside these ranges, Eco mode is used.
+      selector:
+        object:
+          label_field: start
+          description_field: end
+          multiple: true
+          fields:
+            start:
+              label: Start
+              required: true
+              selector:
+                time:
+            end:
+              label: End
+              required: true
+              selector:
+                time:
+    thursday:
+      name: Thursday
+      description: >
+        Comfort time ranges for this day.
+        Each entry defines a start and end time during which
+        Comfort mode is active. Outside these ranges, Eco mode is used.
+      selector:
+        object:
+          label_field: start
+          description_field: end
+          multiple: true
+          fields:
+            start:
+              label: Start
+              required: true
+              selector:
+                time:
+            end:
+              label: End
+              required: true
+              selector:
+                time:
+    friday:
+      name: Friday
+      description: >
+        Comfort time ranges for this day.
+        Each entry defines a start and end time during which
+        Comfort mode is active. Outside these ranges, Eco mode is used.
+      selector:
+        object:
+          label_field: start
+          description_field: end
+          multiple: true
+          fields:
+            start:
+              label: Start
+              required: true
+              selector:
+                time:
+            end:
+              label: End
+              required: true
+              selector:
+                time:
+    saturday:
+      name: Saturday
+      description: >
+        Comfort time ranges for this day.
+        Each entry defines a start and end time during which
+        Comfort mode is active. Outside these ranges, Eco mode is used.
+      selector:
+        object:
+          label_field: start
+          description_field: end
+          multiple: true
+          fields:
+            start:
+              label: Start
+              required: true
+              selector:
+                time:
+            end:
+              label: End
+              required: true
+              selector:
+                time:
+    sunday:
+      name: Sunday
+      description: >
+        Comfort time ranges for this day.
+        Each entry defines a start and end time during which
+        Comfort mode is active. Outside these ranges, Eco mode is used.
+      selector:
+        object:
+          label_field: start
+          description_field: end
+          multiple: true
+          fields:
+            start:
+              label: Start
+              required: true
+              selector:
+                time:
+            end:
+              label: End
+              required: true
+              selector:
+                time:
+
+mode: single
+
+variables:
+  thermostat: !input thermostat
+  state_helper: !input state_helper
+  plan_timer: !input plan_timer
+  heat_temp: !input heat_temp
+  eco_temp: !input eco_temp
+  off_start: !input off_start
+  off_end: !input off_end
+  weekday_schedules:
+    mon: !input monday
+    tue: !input tuesday
+    wed: !input wednesday
+    thu: !input thursday
+    fri: !input friday
+    sat: !input saturday
+    sun: !input sunday
+
+triggers:
+  - trigger: event
+    event_type: timer.finished
+    event_data:
+      entity_id: !input plan_timer
+    id: timer_finished
+  - trigger: event
+    event_type: timer.restarted
+    event_data:
+      entity_id: !input plan_timer
+    id: timer_restarted
+  - trigger: state
+    entity_id: !input state_helper
+    to:
+      - Comfort
+      - Eco
+      - "Off"
+    id: state_changed
+
+conditions: []
+
+actions:
+  ######################################################################
+  # State Helper → Thermostat steuern
+  ######################################################################
+  - if:
+      - "{{ trigger.id == 'state_changed' }}"
+    then:
+      - variables:
+          mode: "{{ trigger.to_state.state }}"
+          current_mode: "{{ states(thermostat) }}"
+          current_temp: "{{ state_attr(thermostat, 'temperature') }}"
+          desired_temp: "{{ heat_temp if mode == 'Comfort' else eco_temp }}"
+      - if:
+          - "{{ mode == 'Off' }}"
+        then:
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: "{{ thermostat }}"
+            data:
+              hvac_mode: "off"
+        else:
+          - if:
+              - "{{ current_mode != 'heat' }}"
+            then:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ thermostat }}"
+                data:
+                  hvac_mode: "heat"
+          - if:
+              - "{{ current_temp != desired_temp }}"
+            then:
+              - action: climate.set_temperature
+                target:
+                  entity_id: "{{ thermostat }}"
+                data:
+                  temperature: "{{ desired_temp }}"
+
+    ######################################################################
+    # Zeitplan → State Helper setzen
+    ######################################################################
+    else:
+      - variables:
+          today_t: "{{ tuple(now().strftime('%m-%d').split('-') | map('int')) }}"
+          off_start_t: "{{ tuple(off_start.split('-')[1:] | map('int')) }}"
+          off_end_t: "{{ tuple(off_end.split('-')[1:] | map('int')) }}"
+          weekday_key: "{{ now().strftime('%a').lower()[:3] }}"
+          next_weekday_key: "{{ (now() + timedelta(days=1)).strftime('%a').lower()[:3] }}"
+          current_plan: "{{ weekday_schedules[weekday_key] }}"
+          next_plan: "{{ weekday_schedules[next_weekday_key] }}"
+          desired_mode: Eco
+          comfort_starts: >
+            {{
+              (
+                current_plan
+                | map(attribute='start')
+                | map('today_at')
+                | map('as_timestamp')
+                | map('int')
+                | list
+              )
+              +
+              (
+                next_plan
+                | map(attribute='start')
+                | map('today_at')
+                | map('as_timestamp')
+                | map('int')
+                | map('add', 86400)
+                | list
+              )
+            }}
+          comfort_ends: >
+            {{
+              current_plan
+              | map(attribute='end')
+              | map('today_at')
+              | map('as_timestamp')
+              | map('int')
+              | list
+            }}
+      - if:
+          - >
+            {% if off_start_t <= off_end_t %}
+              {{ off_start_t <= today_t <= off_end_t }}
+            {% else %}
+              {{ today_t >= off_start_t or today_t <= off_end_t }}
+            {% endif %}
+        then:
+          - variables:
+              desired_mode: "Off"
+        else:
+          - if:
+              - "{{ current_plan | count == 0 }}"
+            then:
+              - variables:
+                  desired_mode: Eco
+            else:
+              - repeat:
+                  for_each: "{{ current_plan }}"
+                  sequence:
+                    - choose:
+                        - conditions:
+                            - condition: template
+                              value_template: >
+                                {{ today_at(repeat.item.start) <= now() <= today_at(repeat.item.end) }}
+                          sequence:
+                            - variables:
+                                desired_mode: Comfort
+      - variables:
+          now_ts: "{{ now() | as_timestamp | int }}"
+          off_end_ts: "{{ off_end | as_datetime | as_timestamp | int }}"
+          off_start_ts: "{{ off_start | as_datetime | as_timestamp | int }}"
+          selected_list: >
+            {{
+              (comfort_ends if desired_mode == 'Comfort' else comfort_starts if desired_mode == 'Eco' else [off_end_ts]) + [off_start_ts]
+            }}
+          next_duration: >
+            {{
+              (
+                (selected_list
+                | select('>', now_ts)
+                | sort
+                | first
+                | as_datetime
+                | as_local
+                ) - now()
+              ).total_seconds() + 1
+            }}
+
+      - action: timer.cancel
+        target:
+          entity_id: "{{ plan_timer }}"
+      - action: timer.start
+        target:
+          entity_id: "{{ plan_timer }}"
+        data:
+          duration: "{{ next_duration }}"
+      - if:
+          - "{{ trigger.id != 'timer_restarted' }}"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: "{{ state_helper }}"
+            data:
+              option: "{{ desired_mode }}"
