@@ -258,8 +258,26 @@ triggers:
       - Eco
       - "Off"
     id: state_changed
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+  - trigger: event
+    event_type: automation_reloaded
+    id: automation_reloaded
 
-conditions: []
+conditions:
+  # Only kick off the schedule on start/reload if the timer chain is broken
+  - condition: or
+    conditions:
+      - condition: not
+        conditions:
+          - condition: trigger
+            id:
+              - ha_start
+              - automation_reloaded
+      - condition: state
+        entity_id: !input plan_timer
+        state: idle
 
 actions:
   ######################################################################
