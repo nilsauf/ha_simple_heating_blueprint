@@ -73,172 +73,47 @@ blueprint:
         date:
     monday:
       name: Monday
-      description: >
-        Comfort time ranges for this day.
-        Each entry defines a start and end time during which
-        Comfort mode is active. Outside these ranges, Eco mode is used.
-        Leave empty to use Eco mode all day.
-      default: []
-      selector:
-        object:
-          label_field: start
-          description_field: end
-          multiple: true
-          fields:
-            start:
-              label: Start
-              required: true
-              selector:
-                time:
-            end:
-              label: End
-              required: true
-              selector:
-                time:
+      <<: &weekday_schedule
+        description: >
+          Comfort time ranges for this day.
+          Each entry defines a start and end time during which
+          Comfort mode is active. Outside these ranges, Eco mode is used.
+          Leave empty to use Eco mode all day.
+        default: []
+        selector:
+          object:
+            label_field: start
+            description_field: end
+            multiple: true
+            fields:
+              start:
+                label: Start
+                required: true
+                selector:
+                  time:
+              end:
+                label: End
+                required: true
+                selector:
+                  time:
     tuesday:
       name: Tuesday
-      description: >
-        Comfort time ranges for this day.
-        Each entry defines a start and end time during which
-        Comfort mode is active. Outside these ranges, Eco mode is used.
-        Leave empty to use Eco mode all day.
-      default: []
-      selector:
-        object:
-          label_field: start
-          description_field: end
-          multiple: true
-          fields:
-            start:
-              label: Start
-              required: true
-              selector:
-                time:
-            end:
-              label: End
-              required: true
-              selector:
-                time:
+      <<: *weekday_schedule
     wednesday:
       name: Wednesday
-      description: >
-        Comfort time ranges for this day.
-        Each entry defines a start and end time during which
-        Comfort mode is active. Outside these ranges, Eco mode is used.
-        Leave empty to use Eco mode all day.
-      default: []
-      selector:
-        object:
-          label_field: start
-          description_field: end
-          multiple: true
-          fields:
-            start:
-              label: Start
-              required: true
-              selector:
-                time:
-            end:
-              label: End
-              required: true
-              selector:
-                time:
+      <<: *weekday_schedule
     thursday:
       name: Thursday
-      description: >
-        Comfort time ranges for this day.
-        Each entry defines a start and end time during which
-        Comfort mode is active. Outside these ranges, Eco mode is used.
-        Leave empty to use Eco mode all day.
-      default: []
-      selector:
-        object:
-          label_field: start
-          description_field: end
-          multiple: true
-          fields:
-            start:
-              label: Start
-              required: true
-              selector:
-                time:
-            end:
-              label: End
-              required: true
-              selector:
-                time:
+      <<: *weekday_schedule
     friday:
       name: Friday
-      description: >
-        Comfort time ranges for this day.
-        Each entry defines a start and end time during which
-        Comfort mode is active. Outside these ranges, Eco mode is used.
-        Leave empty to use Eco mode all day.
-      default: []
-      selector:
-        object:
-          label_field: start
-          description_field: end
-          multiple: true
-          fields:
-            start:
-              label: Start
-              required: true
-              selector:
-                time:
-            end:
-              label: End
-              required: true
-              selector:
-                time:
+      <<: *weekday_schedule
     saturday:
       name: Saturday
-      description: >
-        Comfort time ranges for this day.
-        Each entry defines a start and end time during which
-        Comfort mode is active. Outside these ranges, Eco mode is used.
-        Leave empty to use Eco mode all day.
-      default: []
-      selector:
-        object:
-          label_field: start
-          description_field: end
-          multiple: true
-          fields:
-            start:
-              label: Start
-              required: true
-              selector:
-                time:
-            end:
-              label: End
-              required: true
-              selector:
-                time:
+      <<: *weekday_schedule
     sunday:
       name: Sunday
-      description: >
-        Comfort time ranges for this day.
-        Each entry defines a start and end time during which
-        Comfort mode is active. Outside these ranges, Eco mode is used.
-        Leave empty to use Eco mode all day.
-      default: []
-      selector:
-        object:
-          label_field: start
-          description_field: end
-          multiple: true
-          fields:
-            start:
-              label: Start
-              required: true
-              selector:
-                time:
-            end:
-              label: End
-              required: true
-              selector:
-                time:
+      <<: *weekday_schedule
 
 mode: queued
 
