@@ -207,3 +207,5 @@ The nearest future timestamp is selected, converted into a duration, and schedul
   - Multiple climate entities
   - Per-day temperature overrides
 - Time ranges must not overlap (not enforced)
+- Time ranges must not cross midnight (e.g. `22:00–02:00` never activates
+  Comfort); split them into `22:00–23:59:59` and `00:00–02:00` on the next day
