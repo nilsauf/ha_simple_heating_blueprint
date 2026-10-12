@@ -56,6 +56,8 @@ blueprint:
         Start date of the heating-off period.
         During this time the heating will be forced to Off mode.
         Year will be ignored, the date will apply to all years.
+        Leave start or end empty to disable the heating-off period.
+      default: ""
       selector:
         date:
     off_end:
@@ -64,14 +66,18 @@ blueprint:
         End date of the heating-off period.
         Heating resumes automatically after this date.
         Year will be ignored, the date will apply to all years.
+        Leave start or end empty to disable the heating-off period.
+      default: ""
       selector:
         date:
     monday:
       name: Monday
       description: >
-        One or more Comfort time ranges for this day.
+        Comfort time ranges for this day.
         Each entry defines a start and end time during which
         Comfort mode is active. Outside these ranges, Eco mode is used.
+        Leave empty to use Eco mode all day.
+      default: []
       selector:
         object:
           label_field: start
@@ -94,6 +100,8 @@ blueprint:
         Comfort time ranges for this day.
         Each entry defines a start and end time during which
         Comfort mode is active. Outside these ranges, Eco mode is used.
+        Leave empty to use Eco mode all day.
+      default: []
       selector:
         object:
           label_field: start
@@ -116,6 +124,8 @@ blueprint:
         Comfort time ranges for this day.
         Each entry defines a start and end time during which
         Comfort mode is active. Outside these ranges, Eco mode is used.
+        Leave empty to use Eco mode all day.
+      default: []
       selector:
         object:
           label_field: start
@@ -138,6 +148,8 @@ blueprint:
         Comfort time ranges for this day.
         Each entry defines a start and end time during which
         Comfort mode is active. Outside these ranges, Eco mode is used.
+        Leave empty to use Eco mode all day.
+      default: []
       selector:
         object:
           label_field: start
@@ -160,6 +172,8 @@ blueprint:
         Comfort time ranges for this day.
         Each entry defines a start and end time during which
         Comfort mode is active. Outside these ranges, Eco mode is used.
+        Leave empty to use Eco mode all day.
+      default: []
       selector:
         object:
           label_field: start
@@ -182,6 +196,8 @@ blueprint:
         Comfort time ranges for this day.
         Each entry defines a start and end time during which
         Comfort mode is active. Outside these ranges, Eco mode is used.
+        Leave empty to use Eco mode all day.
+      default: []
       selector:
         object:
           label_field: start
@@ -204,6 +220,8 @@ blueprint:
         Comfort time ranges for this day.
         Each entry defines a start and end time during which
         Comfort mode is active. Outside these ranges, Eco mode is used.
+        Leave empty to use Eco mode all day.
+      default: []
       selector:
         object:
           label_field: start
@@ -231,6 +249,8 @@ variables:
   eco_temp: !input eco_temp
   off_start: !input off_start
   off_end: !input off_end
+  off_enabled: >
+    {{ off_start is string and off_start != '' and off_end is string and off_end != '' }}
   weekday_schedules:
     mon: !input monday
     tue: !input tuesday
@@ -325,8 +345,8 @@ actions:
     else:
       - variables:
           today_t: "{{ tuple(now().strftime('%m-%d').split('-') | map('int')) }}"
-          off_start_t: "{{ tuple(off_start.split('-')[1:] | map('int')) }}"
-          off_end_t: "{{ tuple(off_end.split('-')[1:] | map('int')) }}"
+          off_start_t: "{{ tuple((off_start or '').split('-')[1:] | map('int')) }}"
+          off_end_t: "{{ tuple((off_end or '').split('-')[1:] | map('int')) }}"
           weekday_key: "{{ now().strftime('%a').lower()[:3] }}"
           next_weekday_key: "{{ (now() + timedelta(days=1)).strftime('%a').lower()[:3] }}"
           current_plan: "{{ weekday_schedules[weekday_key] }}"
@@ -359,7 +379,9 @@ actions:
             }}
       - if:
           - >
-            {% if off_start_t <= off_end_t %}
+            {% if not off_enabled %}
+              false
+            {% elif off_start_t <= off_end_t %}
               {{ off_start_t <= today_t <= off_end_t }}
             {% else %}
               {{ today_t >= off_start_t or today_t <= off_end_t }}
@@ -390,6 +412,7 @@ actions:
           # Next local 00:00 of off_start (MM-DD) strictly after now.
           # Feb 29 in a non-leap year is treated as Mar 1.
           off_start_ts: >
+            {%- if off_enabled -%}
             {%- set md = off_start.split('-')[1:] | map('int') | list -%}
             {%- set ns = namespace(ts=[]) -%}
             {%- for y in [now().year, now().year + 1] -%}
@@ -399,8 +422,10 @@ actions:
               {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
             {%- endfor -%}
             {{ ns.ts | select('>', now_ts) | min }}
+            {%- endif -%}
           # Next local 00:00 of the day after off_end (end day is inclusive).
           off_end_ts: >
+            {%- if off_enabled -%}
             {%- set md = off_end.split('-')[1:] | map('int') | list -%}
             {%- set ns = namespace(ts=[]) -%}
             {%- for y in [now().year, now().year + 1] -%}
@@ -412,12 +437,14 @@ actions:
               {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
             {%- endfor -%}
             {{ ns.ts | select('>', now_ts) | min }}
+            {%- endif -%}
           # Daily re-evaluation; guarantees selected_list is never empty.
           midnight_ts: "{{ (today_at('00:00') + timedelta(days=1)) | as_timestamp | int }}"
           selected_list: >
             {{
               (comfort_ends if desired_mode == 'Comfort' else comfort_starts if desired_mode == 'Eco' else [off_end_ts])
-              + [off_start_ts, midnight_ts]
+              + ([off_start_ts] if off_enabled else [])
+              + [midnight_ts]
             }}
           next_duration: >
             {{

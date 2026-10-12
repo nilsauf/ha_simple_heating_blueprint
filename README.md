@@ -70,6 +70,7 @@ Example logic:
 
 ### Seasonal Heating-Off Period
 
+- Optional: leave start or end date empty to disable it
 - Configurable start and end dates
 - **Year is ignored** → period repeats every year
 - Correctly handles year-crossing ranges (e.g. Oct–Mar)
@@ -114,6 +115,8 @@ Example logic:
 |-----|------------|
 | `off_start` | Start date of heating-off period (MM-DD used) |
 | `off_end` | End date of heating-off period (MM-DD used) |
+
+Both dates are optional. Leave either empty to disable the heating-off period.
 
 ### Weekly Schedules
 
