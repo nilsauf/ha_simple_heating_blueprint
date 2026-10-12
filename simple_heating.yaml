@@ -5,6 +5,8 @@ blueprint:
     Simple heating automation with weekly schedules, Comfort/Eco modes and
     an optional heating-off period. Controls a thermostat via an input_select
     and automatically switches temperature and HVAC mode based on a timer.
+  homeassistant:
+    min_version: 2025.4.0
 
   input:
     thermostat:
