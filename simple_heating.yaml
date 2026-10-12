@@ -264,7 +264,9 @@ actions:
   # State Helper → Thermostat steuern
   ######################################################################
   - if:
-      - "{{ trigger.id == 'state_changed' }}"
+      - condition: trigger
+        id:
+          - state_changed
     then:
       - variables:
           mode: "{{ trigger.to_state.state }}"
@@ -398,7 +400,11 @@ actions:
         data:
           duration: "{{ next_duration }}"
       - if:
-          - "{{ trigger.id != 'timer_restarted' }}"
+          - condition: not
+            conditions:
+              - condition: trigger
+                id:
+                  - timer_restarted
         then:
           - action: input_select.select_option
             target:
