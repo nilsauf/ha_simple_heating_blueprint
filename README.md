@@ -86,6 +86,8 @@ Example logic:
   - Immediately updates the thermostat
   - Does **not** break the schedule
 - The next timer event will re-evaluate and reapply scheduled logic
+- Since the schedule is re-evaluated every midnight, an override lasts at
+  most until the next scheduled change or midnight, whichever comes first
 
 ---
 
@@ -156,7 +158,13 @@ Depending on the active mode, the next timer target is:
 
 - **Comfort** → next Comfort end
 - **Eco** → next Comfort start
-- **Off** → end of heating-off period
+- **Off** → end of heating-off period (midnight after the end date)
+
+In every mode, the next start of the heating-off period and the next local
+midnight are added as candidates. Off-period boundaries are the next yearly
+occurrence of the configured MM-DD, so the configured year has no effect.
+The midnight candidate re-evaluates the schedule daily and guarantees there
+is always a next target.
 
 The nearest future timestamp is selected, converted into a duration, and scheduled.
 

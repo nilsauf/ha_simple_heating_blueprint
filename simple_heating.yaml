@@ -387,11 +387,37 @@ actions:
                                 desired_mode: Comfort
       - variables:
           now_ts: "{{ now() | as_timestamp | int }}"
-          off_end_ts: "{{ off_end | as_datetime | as_timestamp | int }}"
-          off_start_ts: "{{ off_start | as_datetime | as_timestamp | int }}"
+          # Next local 00:00 of off_start (MM-DD) strictly after now.
+          # Feb 29 in a non-leap year is treated as Mar 1.
+          off_start_ts: >
+            {%- set md = off_start.split('-')[1:] | map('int') | list -%}
+            {%- set ns = namespace(ts=[]) -%}
+            {%- for y in [now().year, now().year + 1] -%}
+              {%- set leap = (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 -%}
+              {%- set feb29 = md == [2, 29] and not leap -%}
+              {%- set b = today_at('00:00').replace(year=y, month=3 if feb29 else md[0], day=1 if feb29 else md[1]) -%}
+              {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
+            {%- endfor -%}
+            {{ ns.ts | select('>', now_ts) | min }}
+          # Next local 00:00 of the day after off_end (end day is inclusive).
+          off_end_ts: >
+            {%- set md = off_end.split('-')[1:] | map('int') | list -%}
+            {%- set ns = namespace(ts=[]) -%}
+            {%- for y in [now().year, now().year + 1] -%}
+              {%- if md == [2, 29] -%}
+                {%- set b = today_at('00:00').replace(year=y, month=3, day=1) -%}
+              {%- else -%}
+                {%- set b = today_at('00:00').replace(year=y, month=md[0], day=md[1]) + timedelta(days=1) -%}
+              {%- endif -%}
+              {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
+            {%- endfor -%}
+            {{ ns.ts | select('>', now_ts) | min }}
+          # Daily re-evaluation; guarantees selected_list is never empty.
+          midnight_ts: "{{ (today_at('00:00') + timedelta(days=1)) | as_timestamp | int }}"
           selected_list: >
             {{
-              (comfort_ends if desired_mode == 'Comfort' else comfort_starts if desired_mode == 'Eco' else [off_end_ts]) + [off_start_ts]
+              (comfort_ends if desired_mode == 'Comfort' else comfort_starts if desired_mode == 'Eco' else [off_end_ts])
+              + [off_start_ts, midnight_ts]
             }}
           next_duration: >
             {{
