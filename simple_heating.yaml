@@ -239,7 +239,7 @@ blueprint:
               selector:
                 time:
 
-mode: parallel
+mode: queued
 
 variables:
   thermostat: !input thermostat
