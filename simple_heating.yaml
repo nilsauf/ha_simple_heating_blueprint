@@ -315,6 +315,10 @@ actions:
           next_plan: "{{ weekday_schedules[next_weekday_key] }}"
           desired_mode: Eco
           comfort_starts: >
+            {%- set ns = namespace(tomorrow=[]) -%}
+            {%- for item in next_plan -%}
+              {%- set ns.tomorrow = ns.tomorrow + [(today_at(item.start) + timedelta(days=1)) | as_timestamp | int] -%}
+            {%- endfor -%}
             {{
               (
                 current_plan
@@ -324,16 +328,7 @@ actions:
                 | map('int')
                 | list
               )
-              +
-              (
-                next_plan
-                | map(attribute='start')
-                | map('today_at')
-                | map('as_timestamp')
-                | map('int')
-                | map('add', 86400)
-                | list
-              )
+              + ns.tomorrow
             }}
           comfort_ends: >
             {{
