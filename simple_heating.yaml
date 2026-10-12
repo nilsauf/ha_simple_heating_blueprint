@@ -1,6 +1,7 @@
 blueprint:
   name: Simple Heating
   domain: automation
+  source_url: https://github.com/nilsauf/ha_simple_heating_blueprint/blob/main/simple_heating.yaml
   description: >
     Simple heating automation with weekly schedules, Comfort/Eco modes and
     an optional heating-off period. Controls a thermostat via an input_select
@@ -301,7 +302,7 @@ conditions:
 
 actions:
   ######################################################################
-  # State Helper → Thermostat steuern
+  # State helper → control thermostat
   ######################################################################
   - if:
       - condition: trigger
@@ -340,15 +341,16 @@ actions:
                   temperature: "{{ desired_temp }}"
 
     ######################################################################
-    # Zeitplan → State Helper setzen
+    # Schedule → set state helper
     ######################################################################
     else:
       - variables:
           today_t: "{{ tuple(now().strftime('%m-%d').split('-') | map('int')) }}"
           off_start_t: "{{ tuple((off_start or '').split('-')[1:] | map('int')) }}"
           off_end_t: "{{ tuple((off_end or '').split('-')[1:] | map('int')) }}"
-          weekday_key: "{{ now().strftime('%a').lower()[:3] }}"
-          next_weekday_key: "{{ (now() + timedelta(days=1)).strftime('%a').lower()[:3] }}"
+          weekday_keys: "{{ ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] }}"
+          weekday_key: "{{ weekday_keys[now().weekday()] }}"
+          next_weekday_key: "{{ weekday_keys[(now().weekday() + 1) % 7] }}"
           current_plan: "{{ weekday_schedules[weekday_key] }}"
           next_plan: "{{ weekday_schedules[next_weekday_key] }}"
           desired_mode: Eco
@@ -390,23 +392,17 @@ actions:
           - variables:
               desired_mode: "Off"
         else:
-          - if:
-              - "{{ current_plan | count == 0 }}"
-            then:
-              - variables:
-                  desired_mode: Eco
-            else:
-              - repeat:
-                  for_each: "{{ current_plan }}"
-                  sequence:
-                    - choose:
-                        - conditions:
-                            - condition: template
-                              value_template: >
-                                {{ today_at(repeat.item.start) <= now() <= today_at(repeat.item.end) }}
-                          sequence:
-                            - variables:
-                                desired_mode: Comfort
+          - repeat:
+              for_each: "{{ current_plan }}"
+              sequence:
+                - choose:
+                    - conditions:
+                        - condition: template
+                          value_template: >
+                            {{ today_at(repeat.item.start) <= now() <= today_at(repeat.item.end) }}
+                      sequence:
+                        - variables:
+                            desired_mode: Comfort
       - variables:
           now_ts: "{{ now() | as_timestamp | int }}"
           # Next local 00:00 of off_start (MM-DD) strictly after now.

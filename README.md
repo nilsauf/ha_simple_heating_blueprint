@@ -89,6 +89,9 @@ Example logic:
 - The next timer event will re-evaluate and reapply scheduled logic
 - Since the schedule is re-evaluated every midnight, an override lasts at
   most until the next scheduled change or midnight, whichever comes first
+- Changing the thermostat directly is not corrected: the thermostat is only
+  updated when the `input_select` changes state, so a manual setpoint stays
+  until the next mode change
 
 ---
 
@@ -135,12 +138,17 @@ Each weekday accepts:
    - Recalculate desired mode
    - Schedule next transition
 
-2. **Timer restarted**
-   - Same as finished, but avoids feedback loops
+2. **Timer restarted** (e.g. `timer.start` called on a running timer)
+   - Recalculate and schedule the next transition
+   - Does **not** change the current mode, so manual overrides are kept
 
 3. **State helper changed**
    - Immediate thermostat update
    - No timer recalculation
+
+4. **Home Assistant start / automation reloaded**
+   - Only if the timer is idle (e.g. not restored, or expired while HA was down)
+   - Same as timer finished: recalculate mode and schedule next transition
 
 ---
 
