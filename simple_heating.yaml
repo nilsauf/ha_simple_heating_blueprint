@@ -21,7 +21,9 @@ blueprint:
       description: >
         Input select used to control the heating mode.
         Must contain the options: Comfort, Eco and Off.
-        Manual changes are applied immediately.
+        Manual changes are applied immediately and kept until the
+        schedule's mode next changes. A Home Assistant restart reapplies
+        the schedule.
       selector:
         entity:
           domain: input_select
@@ -78,6 +80,9 @@ blueprint:
           Comfort time ranges for this day.
           Each entry defines a start and end time during which
           Comfort mode is active. Outside these ranges, Eco mode is used.
+          The start is inclusive, the end exclusive. An end of 00:00 means
+          midnight. Overlapping ranges are merged. Other ranges that end
+          before they start (crossing midnight) are ignored.
           Leave empty to use Eco mode all day.
         default: []
         selector:
@@ -160,7 +165,9 @@ triggers:
     id: automation_reloaded
 
 conditions:
-  # Only kick off the schedule on start/reload if the timer chain is broken
+  # On start, only kick off the schedule if the timer chain is broken.
+  # On reload, also recalculate a running timer (the schedule may have been
+  # edited). A paused timer is left alone.
   - condition: or
     conditions:
       - condition: not
@@ -172,6 +179,13 @@ conditions:
       - condition: state
         entity_id: !input plan_timer
         state: idle
+      - condition: and
+        conditions:
+          - condition: trigger
+            id: automation_reloaded
+          - condition: state
+            entity_id: !input plan_timer
+            state: active
 
 actions:
   ######################################################################
@@ -219,104 +233,90 @@ actions:
     else:
       - variables:
           now_ts: "{{ now() | as_timestamp | int }}"
-          # Boundaries are the next local 00:00 strictly after now of the start
-          # day and of the day after the (inclusive) end day. A missing Feb 29
-          # starts the period on Mar 1 and ends it after Feb 28.
+          # Mode resolver. resolve(t) returns "<mode> <next_change_ts>" for any
+          # timestamp t, using only t (never now()), so it can be evaluated for
+          # both now and the moment the state helper last changed.
+          #
+          # Off period: boundaries are the next local 00:00 strictly after t of
+          # the start day and of the day after the (inclusive) end day. A missing
+          # Feb 29 starts the period on Mar 1 and ends it after Feb 28.
           # Active iff the next end comes before the next start. If both coincide,
           # the period covers the whole year (end is the day before start),
           # unless it is Feb 29 to Feb 29 in a non-leap year, which is empty.
-          off_period: >
-            {%- macro next_boundary_ts(date, is_end) -%}
+          #
+          # Comfort: ranges of t's weekday, start inclusive, end exclusive. An end
+          # of 00:00 means midnight; other ranges with end <= start are ignored.
+          # Overlapping or adjacent ranges are merged, so the next change while
+          # in Comfort is the end of the merged block.
+          #
+          # Off beats Comfort beats Eco. The next local midnight is always a
+          # candidate, so there is always a next change.
+          schedule: >
+            {%- macro local_ts(t, hms, days) -%}
+            {%- set p = (hms ~ ':0:0').split(':') | map('int') | list -%}
+            {{ ((t | as_datetime | as_local).replace(hour=p[0], minute=p[1], second=p[2], microsecond=0, fold=0) + timedelta(days=days)) | as_timestamp | int }}
+            {%- endmacro -%}
+            {%- macro off_boundary(t, date, is_end) -%}
             {%- set md = date.split('-')[1:] | map('int') | list -%}
+            {%- set base = (t | as_datetime | as_local).replace(hour=0, minute=0, second=0, microsecond=0, fold=0) -%}
             {%- set ns = namespace(ts=[]) -%}
-            {%- for y in [now().year, now().year + 1] -%}
+            {%- for y in [base.year, base.year + 1] -%}
               {%- set leap = (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 -%}
               {%- if md == [2, 29] and (is_end or not leap) -%}
-                {%- set b = today_at('00:00').replace(year=y, month=3, day=1) -%}
+                {%- set b = base.replace(year=y, month=3, day=1) -%}
               {%- else -%}
-                {%- set b = today_at('00:00').replace(year=y, month=md[0], day=md[1]) + timedelta(days=1 if is_end else 0) -%}
+                {%- set b = base.replace(year=y, month=md[0], day=md[1]) + timedelta(days=1 if is_end else 0) -%}
               {%- endif -%}
               {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
             {%- endfor -%}
-            {{ ns.ts | select('>', now_ts) | min }}
+            {{ ns.ts | select('>', t) | min }}
             {%- endmacro -%}
+            {%- macro resolve(t) -%}
+            {%- set midnight = local_ts(t, '00:00', 1) | int -%}
+            {%- set ns = namespace(off_active=false, candidates=[midnight], ranges=[], starts=[], block_end=t) -%}
             {%- if off_start is string and off_start != '' and off_end is string and off_end != '' -%}
-              {%- set next_start = next_boundary_ts(off_start, false) | int -%}
-              {%- set next_end = next_boundary_ts(off_end, true) | int -%}
+              {%- set next_start = off_boundary(t, off_start, false) | int -%}
+              {%- set next_end = off_boundary(t, off_end, true) | int -%}
               {%- set whole_year = next_end == next_start and off_start.split('-')[1:] != off_end.split('-')[1:] -%}
-              {{ {'active': next_end < next_start or whole_year, 'next_change_ts': [next_start, next_end] | min} }}
-            {%- else -%}
-              {{ {'active': false, 'next_change_ts': none} }}
+              {%- set ns.off_active = next_end < next_start or whole_year -%}
+              {%- set ns.candidates = ns.candidates + [[next_start, next_end] | min] -%}
             {%- endif -%}
-          weekday_keys: "{{ ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] }}"
-          weekday_key: "{{ weekday_keys[now().weekday()] }}"
-          next_weekday_key: "{{ weekday_keys[(now().weekday() + 1) % 7] }}"
-          current_plan: "{{ weekday_schedules[weekday_key] }}"
-          next_plan: "{{ weekday_schedules[next_weekday_key] }}"
-          desired_mode: Eco
-          comfort_starts: >
-            {%- set ns = namespace(tomorrow=[]) -%}
-            {%- for item in next_plan -%}
-              {%- set ns.tomorrow = ns.tomorrow + [(today_at(item.start) + timedelta(days=1)) | as_timestamp | int] -%}
+            {%- set day_start = local_ts(t, '00:00', 0) | int -%}
+            {%- set weekday = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][(t | as_datetime | as_local).weekday()] -%}
+            {%- for item in weekday_schedules[weekday] -%}
+              {%- set s = local_ts(t, item.start, 0) | int -%}
+              {%- set e = local_ts(t, item.end, 0) | int -%}
+              {%- set e = midnight if e == day_start else e -%}
+              {%- if e > s -%}
+                {%- set ns.ranges = ns.ranges + [[s, e]] -%}
+                {%- if s > t -%}
+                  {%- set ns.starts = ns.starts + [s] -%}
+                {%- endif -%}
+              {%- endif -%}
             {%- endfor -%}
-            {{
-              (
-                current_plan
-                | map(attribute='start')
-                | map('today_at')
-                | map('as_timestamp')
-                | map('int')
-                | list
-              )
-              + ns.tomorrow
-            }}
-          comfort_ends: >
-            {{
-              current_plan
-              | map(attribute='end')
-              | map('today_at')
-              | map('as_timestamp')
-              | map('int')
-              | list
-            }}
-      - if:
-          - "{{ off_period.active }}"
-        then:
-          - variables:
-              desired_mode: "Off"
-        else:
-          - repeat:
-              for_each: "{{ current_plan }}"
-              sequence:
-                - choose:
-                    - conditions:
-                        - condition: template
-                          value_template: >
-                            {{ today_at(repeat.item.start) <= now() <= today_at(repeat.item.end) }}
-                      sequence:
-                        - variables:
-                            desired_mode: Comfort
-      - variables:
-          # Daily re-evaluation; guarantees selected_list is never empty.
-          midnight_ts: "{{ (today_at('00:00') + timedelta(days=1)) | as_timestamp | int }}"
-          selected_list: >
-            {{
-              (comfort_ends if desired_mode == 'Comfort' else comfort_starts if desired_mode == 'Eco' else [])
-              + ([off_period.next_change_ts] if off_period.next_change_ts is not none else [])
-              + [midnight_ts]
-            }}
-          next_duration: >
-            {{
-              (
-                (selected_list
-                | select('>', now_ts)
-                | sort
-                | first
-                | as_datetime
-                | as_local
-                ) - now()
-              ).total_seconds() + 1
-            }}
+            {%- for r in ns.ranges | sort -%}
+              {%- if r[0] <= ns.block_end and r[1] > ns.block_end -%}
+                {%- set ns.block_end = r[1] -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- if ns.off_active -%}
+              {%- set mode = 'Off' -%}
+            {%- elif ns.block_end > t -%}
+              {%- set mode = 'Comfort' -%}
+              {%- set ns.candidates = ns.candidates + [ns.block_end] -%}
+            {%- else -%}
+              {%- set mode = 'Eco' -%}
+              {%- set ns.candidates = ns.candidates + ns.starts -%}
+            {%- endif -%}
+            {{ mode }} {{ ns.candidates | select('>', t) | min }}
+            {%- endmacro -%}
+            {%- set current = resolve(now_ts).split() -%}
+            {%- set previous = resolve(as_timestamp(states[state_helper].last_changed, now_ts) | int).split() -%}
+            {{ {'mode': current[0], 'previous_mode': previous[0], 'next_change_ts': current[1] | int} }}
+          # The timer chain was broken (HA start or reload with an idle timer):
+          # reapply the schedule unconditionally.
+          force_write: >
+            {{ trigger.id in ['ha_start', 'automation_reloaded'] and is_state(plan_timer, 'idle') }}
 
       - action: timer.cancel
         target:
@@ -325,16 +325,14 @@ actions:
         target:
           entity_id: "{{ plan_timer }}"
         data:
-          duration: "{{ next_duration }}"
+          duration: "{{ schedule.next_change_ts - now_ts + 1 }}"
+      # Only write when the schedule's mode changed since the state helper last
+      # changed, so manual overrides last until the next real mode change.
       - if:
-          - condition: not
-            conditions:
-              - condition: trigger
-                id:
-                  - timer_restarted
+          - "{{ force_write or schedule.mode != schedule.previous_mode }}"
         then:
           - action: input_select.select_option
             target:
               entity_id: "{{ state_helper }}"
             data:
-              option: "{{ desired_mode }}"
+              option: "{{ schedule.mode }}"

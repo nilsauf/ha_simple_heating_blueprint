@@ -59,6 +59,8 @@ Advantages:
 - Multiple Comfort time ranges per day
 - Outside defined ranges, Eco mode is active
 - Empty day schedules default to Eco mode
+- Start is inclusive, end exclusive; an end of `00:00` means midnight
+- Overlapping or adjacent ranges are merged into one Comfort block
 
 Example logic:
 - 06:00–08:00 → Comfort
@@ -86,9 +88,11 @@ Example logic:
 - Changing the `input_select` manually:
   - Immediately updates the thermostat
   - Does **not** break the schedule
-- The next timer event will re-evaluate and reapply scheduled logic
-- Since the schedule is re-evaluated every midnight, an override lasts at
-  most until the next scheduled change or midnight, whichever comes first
+- An override lasts until the schedule's mode next changes. Timer events
+  that don't change the scheduled mode (e.g. the daily midnight
+  re-evaluation) leave the `input_select` untouched
+- A Home Assistant restart with an idle timer reapplies the schedule, so an
+  override does not survive it
 - Changing the thermostat directly is not corrected: the thermostat is only
   updated when the `input_select` changes state, so a manual setpoint stays
   until the next mode change
@@ -135,20 +139,25 @@ Each weekday accepts:
 ### Trigger Types
 
 1. **Timer finished**
-   - Recalculate desired mode
-   - Schedule next transition
+   - Recalculate desired mode and schedule next transition
+   - Set the `input_select` only if the scheduled mode differs from the
+     scheduled mode at the time the `input_select` last changed
 
 2. **Timer restarted** (e.g. `timer.start` called on a running timer)
-   - Recalculate and schedule the next transition
-   - Does **not** change the current mode, so manual overrides are kept
+   - Same as timer finished
 
 3. **State helper changed**
    - Immediate thermostat update
    - No timer recalculation
 
-4. **Home Assistant start / automation reloaded**
-   - Only if the timer is idle (e.g. not restored, or expired while HA was down)
-   - Same as timer finished: recalculate mode and schedule next transition
+4. **Home Assistant start / automation reloaded with an idle timer**
+   - The timer chain is broken (e.g. not restored, or expired while HA was down)
+   - Recalculate, schedule next transition and always set the `input_select`
+
+5. **Automation reloaded with a running timer**
+   - Recalculate and reschedule, so schedule edits take effect on the timer
+   - Set the `input_select` only under the same rule as timer finished
+   - A paused timer is left alone
 
 ---
 
@@ -158,7 +167,7 @@ Each weekday accepts:
    - If yes → `Off`
 2. Load today's schedule
 3. If no entries → `Eco`
-4. If current time is within any Comfort range → `Comfort`
+4. If current time is within any (merged) Comfort range → `Comfort`
 5. Otherwise → `Eco`
 
 ---
@@ -167,9 +176,10 @@ Each weekday accepts:
 
 Depending on the active mode, the next timer target is:
 
-- **Comfort** → next Comfort end
-- **Eco** → next Comfort start
-- **Off** → end of heating-off period (midnight after the end date)
+- **Comfort** → end of the current merged Comfort block
+- **Eco** → next Comfort start today
+- **Off** → end of heating-off period (midnight after the end date);
+  Comfort ranges are ignored
 
 In every mode, the next start of the heating-off period and the next local
 midnight are added as candidates. Off-period boundaries are the next yearly
@@ -178,6 +188,11 @@ The midnight candidate re-evaluates the schedule daily and guarantees there
 is always a next target.
 
 The nearest future timestamp is selected, converted into a duration, and scheduled.
+
+The whole evaluation is one template (`resolve(t)`) that depends only on the
+timestamp it is given. It is evaluated for now and for the moment the
+`input_select` last changed; comparing the two decides whether the schedule
+actually changed and the `input_select` must be set.
 
 ---
 
@@ -214,6 +229,5 @@ The nearest future timestamp is selected, converted into a duration, and schedul
   - Cooling
   - Multiple climate entities
   - Per-day temperature overrides
-- Time ranges must not overlap (not enforced)
 - Time ranges must not cross midnight (e.g. `22:00–02:00` never activates
-  Comfort); split them into `22:00–23:59:59` and `00:00–02:00` on the next day
+  Comfort); split them into `22:00–00:00` and `00:00–02:00` on the next day
