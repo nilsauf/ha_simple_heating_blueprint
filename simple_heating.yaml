@@ -125,8 +125,6 @@ variables:
   eco_temp: !input eco_temp
   off_start: !input off_start
   off_end: !input off_end
-  off_enabled: >
-    {{ off_start is string and off_start != '' and off_end is string and off_end != '' }}
   weekday_schedules:
     mon: !input monday
     tue: !input tuesday
@@ -220,9 +218,36 @@ actions:
     ######################################################################
     else:
       - variables:
-          today_t: "{{ tuple(now().strftime('%m-%d').split('-') | map('int')) }}"
-          off_start_t: "{{ tuple((off_start or '').split('-')[1:] | map('int')) }}"
-          off_end_t: "{{ tuple((off_end or '').split('-')[1:] | map('int')) }}"
+          now_ts: "{{ now() | as_timestamp | int }}"
+          # Boundaries are the next local 00:00 strictly after now of the start
+          # day and of the day after the (inclusive) end day. A missing Feb 29
+          # starts the period on Mar 1 and ends it after Feb 28.
+          # Active iff the next end comes before the next start. If both coincide,
+          # the period covers the whole year (end is the day before start),
+          # unless it is Feb 29 to Feb 29 in a non-leap year, which is empty.
+          off_period: >
+            {%- macro next_boundary_ts(date, is_end) -%}
+            {%- set md = date.split('-')[1:] | map('int') | list -%}
+            {%- set ns = namespace(ts=[]) -%}
+            {%- for y in [now().year, now().year + 1] -%}
+              {%- set leap = (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 -%}
+              {%- if md == [2, 29] and (is_end or not leap) -%}
+                {%- set b = today_at('00:00').replace(year=y, month=3, day=1) -%}
+              {%- else -%}
+                {%- set b = today_at('00:00').replace(year=y, month=md[0], day=md[1]) + timedelta(days=1 if is_end else 0) -%}
+              {%- endif -%}
+              {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
+            {%- endfor -%}
+            {{ ns.ts | select('>', now_ts) | min }}
+            {%- endmacro -%}
+            {%- if off_start is string and off_start != '' and off_end is string and off_end != '' -%}
+              {%- set next_start = next_boundary_ts(off_start, false) | int -%}
+              {%- set next_end = next_boundary_ts(off_end, true) | int -%}
+              {%- set whole_year = next_end == next_start and off_start.split('-')[1:] != off_end.split('-')[1:] -%}
+              {{ {'active': next_end < next_start or whole_year, 'next_change_ts': [next_start, next_end] | min} }}
+            {%- else -%}
+              {{ {'active': false, 'next_change_ts': none} }}
+            {%- endif -%}
           weekday_keys: "{{ ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] }}"
           weekday_key: "{{ weekday_keys[now().weekday()] }}"
           next_weekday_key: "{{ weekday_keys[(now().weekday() + 1) % 7] }}"
@@ -255,14 +280,7 @@ actions:
               | list
             }}
       - if:
-          - >
-            {% if not off_enabled %}
-              false
-            {% elif off_start_t <= off_end_t %}
-              {{ off_start_t <= today_t <= off_end_t }}
-            {% else %}
-              {{ today_t >= off_start_t or today_t <= off_end_t }}
-            {% endif %}
+          - "{{ off_period.active }}"
         then:
           - variables:
               desired_mode: "Off"
@@ -279,42 +297,12 @@ actions:
                         - variables:
                             desired_mode: Comfort
       - variables:
-          now_ts: "{{ now() | as_timestamp | int }}"
-          # Next local 00:00 of off_start (MM-DD) strictly after now.
-          # Feb 29 in a non-leap year is treated as Mar 1.
-          off_start_ts: >
-            {%- if off_enabled -%}
-            {%- set md = off_start.split('-')[1:] | map('int') | list -%}
-            {%- set ns = namespace(ts=[]) -%}
-            {%- for y in [now().year, now().year + 1] -%}
-              {%- set leap = (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 -%}
-              {%- set feb29 = md == [2, 29] and not leap -%}
-              {%- set b = today_at('00:00').replace(year=y, month=3 if feb29 else md[0], day=1 if feb29 else md[1]) -%}
-              {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
-            {%- endfor -%}
-            {{ ns.ts | select('>', now_ts) | min }}
-            {%- endif -%}
-          # Next local 00:00 of the day after off_end (end day is inclusive).
-          off_end_ts: >
-            {%- if off_enabled -%}
-            {%- set md = off_end.split('-')[1:] | map('int') | list -%}
-            {%- set ns = namespace(ts=[]) -%}
-            {%- for y in [now().year, now().year + 1] -%}
-              {%- if md == [2, 29] -%}
-                {%- set b = today_at('00:00').replace(year=y, month=3, day=1) -%}
-              {%- else -%}
-                {%- set b = today_at('00:00').replace(year=y, month=md[0], day=md[1]) + timedelta(days=1) -%}
-              {%- endif -%}
-              {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
-            {%- endfor -%}
-            {{ ns.ts | select('>', now_ts) | min }}
-            {%- endif -%}
           # Daily re-evaluation; guarantees selected_list is never empty.
           midnight_ts: "{{ (today_at('00:00') + timedelta(days=1)) | as_timestamp | int }}"
           selected_list: >
             {{
-              (comfort_ends if desired_mode == 'Comfort' else comfort_starts if desired_mode == 'Eco' else [off_end_ts])
-              + ([off_start_ts] if off_enabled else [])
+              (comfort_ends if desired_mode == 'Comfort' else comfort_starts if desired_mode == 'Eco' else [])
+              + ([off_period.next_change_ts] if off_period.next_change_ts is not none else [])
               + [midnight_ts]
             }}
           next_duration: >
