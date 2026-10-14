@@ -235,7 +235,8 @@ actions:
           now_ts: "{{ now() | as_timestamp | int }}"
           # Mode resolver. resolve(t) returns "<mode> <next_change_ts>" for any
           # timestamp t, using only t (never now()), so it can be evaluated for
-          # both now and the moment the state helper last changed.
+          # both now and the moment the state helper last changed. A
+          # next_change_ts of 0 means the mode never changes.
           #
           # Off period: boundaries are the next local 00:00 strictly after t of
           # the start day and of the day after the (inclusive) end day. A missing
@@ -244,13 +245,14 @@ actions:
           # the period covers the whole year (end is the day before start),
           # unless it is Feb 29 to Feb 29 in a non-leap year, which is empty.
           #
-          # Comfort: ranges of t's weekday, start inclusive, end exclusive. An end
-          # of 00:00 means midnight; other ranges with end <= start are ignored.
-          # Overlapping or adjacent ranges are merged, so the next change while
-          # in Comfort is the end of the merged block.
+          # Comfort: ranges of t's day and the following 7 days (day 7 is t's
+          # weekday next week), start inclusive, end exclusive. An end of 00:00
+          # means midnight; other ranges with end <= start are ignored.
+          # Overlapping or adjacent ranges are merged, also across days, so the
+          # next change while in Comfort is the end of the merged block and
+          # while in Eco the next Comfort start.
           #
-          # Off beats Comfort beats Eco. The next local midnight is always a
-          # candidate, so there is always a next change.
+          # Off beats Comfort beats Eco.
           schedule: >
             {%- macro local_ts(t, hms, days) -%}
             {%- set p = (hms ~ ':0:0').split(':') | map('int') | list -%}
@@ -272,8 +274,7 @@ actions:
             {{ ns.ts | select('>', t) | min }}
             {%- endmacro -%}
             {%- macro resolve(t) -%}
-            {%- set midnight = local_ts(t, '00:00', 1) | int -%}
-            {%- set ns = namespace(off_active=false, candidates=[midnight], ranges=[], starts=[], block_end=t) -%}
+            {%- set ns = namespace(off_active=false, candidates=[], ranges=[], starts=[], block_end=t) -%}
             {%- if off_start is string and off_start != '' and off_end is string and off_end != '' -%}
               {%- set next_start = off_boundary(t, off_start, false) | int -%}
               {%- set next_end = off_boundary(t, off_end, true) | int -%}
@@ -281,18 +282,21 @@ actions:
               {%- set ns.off_active = next_end < next_start or whole_year -%}
               {%- set ns.candidates = ns.candidates + [[next_start, next_end] | min] -%}
             {%- endif -%}
-            {%- set day_start = local_ts(t, '00:00', 0) | int -%}
-            {%- set weekday = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][(t | as_datetime | as_local).weekday()] -%}
-            {%- for item in weekday_schedules[weekday] -%}
-              {%- set s = local_ts(t, item.start, 0) | int -%}
-              {%- set e = local_ts(t, item.end, 0) | int -%}
-              {%- set e = midnight if e == day_start else e -%}
-              {%- if e > s -%}
-                {%- set ns.ranges = ns.ranges + [[s, e]] -%}
-                {%- if s > t -%}
-                  {%- set ns.starts = ns.starts + [s] -%}
+            {%- for d in range(8) -%}
+              {%- set day_start = local_ts(t, '00:00', d) | int -%}
+              {%- set day_end = local_ts(t, '00:00', d + 1) | int -%}
+              {%- set weekday = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][((t | as_datetime | as_local) + timedelta(days=d)).weekday()] -%}
+              {%- for item in weekday_schedules[weekday] -%}
+                {%- set s = local_ts(t, item.start, d) | int -%}
+                {%- set e = local_ts(t, item.end, d) | int -%}
+                {%- set e = day_end if e == day_start else e -%}
+                {%- if e > s -%}
+                  {%- set ns.ranges = ns.ranges + [[s, e]] -%}
+                  {%- if s > t -%}
+                    {%- set ns.starts = ns.starts + [s] -%}
+                  {%- endif -%}
                 {%- endif -%}
-              {%- endif -%}
+              {%- endfor -%}
             {%- endfor -%}
             {%- for r in ns.ranges | sort -%}
               {%- if r[0] <= ns.block_end and r[1] > ns.block_end -%}
@@ -308,7 +312,7 @@ actions:
               {%- set mode = 'Eco' -%}
               {%- set ns.candidates = ns.candidates + ns.starts -%}
             {%- endif -%}
-            {{ mode }} {{ ns.candidates | select('>', t) | min }}
+            {{ mode }} {{ ns.candidates | select('>', t) | min | default(0) }}
             {%- endmacro -%}
             {%- set current = resolve(now_ts).split() -%}
             {%- set previous = resolve(as_timestamp(states[state_helper].last_changed, now_ts) | int).split() -%}
@@ -321,11 +325,16 @@ actions:
       - action: timer.cancel
         target:
           entity_id: "{{ plan_timer }}"
-      - action: timer.start
-        target:
-          entity_id: "{{ plan_timer }}"
-        data:
-          duration: "{{ schedule.next_change_ts - now_ts + 1 }}"
+      # Without a next change (no Comfort ranges and no off period) the timer
+      # stays idle until HA start or an automation reload.
+      - if:
+          - "{{ schedule.next_change_ts > 0 }}"
+        then:
+          - action: timer.start
+            target:
+              entity_id: "{{ plan_timer }}"
+            data:
+              duration: "{{ schedule.next_change_ts - now_ts + 1 }}"
       # Only write when the schedule's mode changed since the state helper last
       # changed, so manual overrides last until the next real mode change.
       - if:

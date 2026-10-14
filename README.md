@@ -88,9 +88,9 @@ Example logic:
 - Changing the `input_select` manually:
   - Immediately updates the thermostat
   - Does **not** break the schedule
-- An override lasts until the schedule's mode next changes. Timer events
-  that don't change the scheduled mode (e.g. the daily midnight
-  re-evaluation) leave the `input_select` untouched
+- An override lasts until the schedule's mode next changes. Re-evaluations
+  that don't change the scheduled mode (e.g. an automation reload with a
+  running timer) leave the `input_select` untouched
 - A Home Assistant restart with an idle timer reapplies the schedule, so an
   override does not survive it
 - Changing the thermostat directly is not corrected: the thermostat is only
@@ -165,10 +165,9 @@ Each weekday accepts:
 
 1. Check if current date is within heating-off period
    - If yes → `Off`
-2. Load today's schedule
-3. If no entries → `Eco`
-4. If current time is within any (merged) Comfort range → `Comfort`
-5. Otherwise → `Eco`
+2. Load the Comfort ranges of today and the next 7 days, merged across days
+3. If current time is within a merged Comfort block → `Comfort`
+4. Otherwise → `Eco`
 
 ---
 
@@ -176,18 +175,22 @@ Each weekday accepts:
 
 Depending on the active mode, the next timer target is:
 
-- **Comfort** → end of the current merged Comfort block
-- **Eco** → next Comfort start today
+- **Comfort** → end of the current merged Comfort block, which may lie on
+  a later day (e.g. `20:00–00:00` followed by `00:00–06:00`)
+- **Eco** → next Comfort start within the next 7 days (the last day looked
+  at is today's weekday next week)
 - **Off** → end of heating-off period (midnight after the end date);
   Comfort ranges are ignored
 
-In every mode, the next start of the heating-off period and the next local
-midnight are added as candidates. Off-period boundaries are the next yearly
-occurrence of the configured MM-DD, so the configured year has no effect.
-The midnight candidate re-evaluates the schedule daily and guarantees there
-is always a next target.
+In every mode, the next start of the heating-off period is added as a
+candidate. Off-period boundaries are the next yearly occurrence of the
+configured MM-DD, so the configured year has no effect.
 
-The nearest future timestamp is selected, converted into a duration, and scheduled.
+The nearest future timestamp is selected, converted into a duration, and
+scheduled. The timer only fires when the mode actually changes (a schedule
+that is Comfort around the clock is re-evaluated after 8 days). If there is
+no next change (no Comfort ranges and no heating-off period), the timer stays
+idle until Home Assistant starts or the automation is reloaded.
 
 The whole evaluation is one template (`resolve(t)`) that depends only on the
 timestamp it is given. It is evaluated for now and for the moment the
