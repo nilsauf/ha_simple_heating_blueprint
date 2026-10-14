@@ -80,9 +80,9 @@ blueprint:
           Comfort time ranges for this day.
           Each entry defines a start and end time during which
           Comfort mode is active. Outside these ranges, Eco mode is used.
-          The start is inclusive, the end exclusive. An end of 00:00 means
-          midnight. Overlapping ranges are merged. Other ranges that end
-          before they start (crossing midnight) are ignored.
+          The start is inclusive, the end exclusive. An end at or before
+          the start ends on the next day (e.g. 22:00-02:00, or 00:00-00:00
+          for the whole day). Overlapping ranges are merged.
           Leave empty to use Eco mode all day.
         default: []
         selector:
@@ -245,9 +245,14 @@ actions:
           # the period covers the whole year (end is the day before start),
           # unless it is Feb 29 to Feb 29 in a non-leap year, which is empty.
           #
-          # Comfort: ranges of t's day and the following 7 days (day 7 is t's
-          # weekday next week), start inclusive, end exclusive. An end of 00:00
-          # means midnight; other ranges with end <= start are ignored.
+          # Comfort: ranges of the day before t (they may still run), t's day
+          # and the following 7 days (day 7 is t's weekday next week), start
+          # inclusive, end exclusive. An end at or before the start (by wall
+          # clock) is on the next day, so 00:00-00:00 and 08:00-08:00 are 24 h.
+          # A range that is empty after a DST change (e.g. 02:30-03:15 on the
+          # night the clocks go forward) never activates Comfort, but its start
+          # stays a candidate, so a schedule with only such a range still has a
+          # next change.
           # Overlapping or adjacent ranges are merged, also across days, so the
           # next change while in Comfort is the end of the merged block and
           # while in Eco the next Comfort start.
@@ -282,19 +287,17 @@ actions:
               {%- set ns.off_active = next_end < next_start or whole_year -%}
               {%- set ns.candidates = ns.candidates + [[next_start, next_end] | min] -%}
             {%- endif -%}
-            {%- for d in range(8) -%}
-              {%- set day_start = local_ts(t, '00:00', d) | int -%}
-              {%- set day_end = local_ts(t, '00:00', d + 1) | int -%}
+            {%- for d in range(-1, 8) -%}
               {%- set weekday = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][((t | as_datetime | as_local) + timedelta(days=d)).weekday()] -%}
               {%- for item in weekday_schedules[weekday] -%}
                 {%- set s = local_ts(t, item.start, d) | int -%}
-                {%- set e = local_ts(t, item.end, d) | int -%}
-                {%- set e = day_end if e == day_start else e -%}
+                {%- set crosses = ((item.end ~ ':0:0').split(':')[:3] | map('int') | list) <= ((item.start ~ ':0:0').split(':')[:3] | map('int') | list) -%}
+                {%- set e = local_ts(t, item.end, d + (1 if crosses else 0)) | int -%}
                 {%- if e > s -%}
                   {%- set ns.ranges = ns.ranges + [[s, e]] -%}
-                  {%- if s > t -%}
-                    {%- set ns.starts = ns.starts + [s] -%}
-                  {%- endif -%}
+                {%- endif -%}
+                {%- if s > t -%}
+                  {%- set ns.starts = ns.starts + [s] -%}
                 {%- endif -%}
               {%- endfor -%}
             {%- endfor -%}

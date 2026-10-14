@@ -59,7 +59,11 @@ Advantages:
 - Multiple Comfort time ranges per day
 - Outside defined ranges, Eco mode is active
 - Empty day schedules default to Eco mode
-- Start is inclusive, end exclusive; an end of `00:00` means midnight
+- Start is inclusive, end exclusive
+- An end at or before the start ends on the next day: `22:00–02:00` runs
+  into the next morning, `00:00–00:00` (or e.g. `08:00–08:00`) covers 24 hours.
+  Earlier versions ignored ranges that cross midnight, so check existing
+  schedules for such entries
 - Overlapping or adjacent ranges are merged into one Comfort block
 
 Example logic:
@@ -165,7 +169,8 @@ Each weekday accepts:
 
 1. Check if current date is within heating-off period
    - If yes → `Off`
-2. Load the Comfort ranges of today and the next 7 days, merged across days
+2. Load the Comfort ranges of yesterday (they may still run), today and the
+   next 7 days, merged across days
 3. If current time is within a merged Comfort block → `Comfort`
 4. Otherwise → `Eco`
 
@@ -232,5 +237,3 @@ actually changed and the `input_select` must be set.
   - Cooling
   - Multiple climate entities
   - Per-day temperature overrides
-- Time ranges must not cross midnight (e.g. `22:00–02:00` never activates
-  Comfort); split them into `22:00–00:00` and `00:00–02:00` on the next day
