@@ -233,21 +233,22 @@ actions:
     else:
       - variables:
           now_ts: "{{ now() | as_timestamp | int }}"
-          # Mode resolver. resolve(t) returns "<mode> <next_change_ts>" for any
-          # timestamp t, using only t (never now()), so it can be evaluated for
-          # both now and the moment the state helper last changed. A
+          # Mode resolver. resolve(timestamp) returns "<mode> <next_change_ts>"
+          # using only the given timestamp (never now()), so it can be evaluated
+          # for both now and the moment the state helper last changed. A
           # next_change_ts of 0 means the mode never changes.
           #
-          # Off period: boundaries are the next local 00:00 strictly after t of
-          # the start day and of the day after the (inclusive) end day. A missing
-          # Feb 29 starts the period on Mar 1 and ends it after Feb 28.
-          # Active iff the next end comes before the next start. If both coincide,
-          # the period covers the whole year (end is the day before start),
-          # unless it is Feb 29 to Feb 29 in a non-leap year, which is empty.
+          # Off period: boundaries are the next local 00:00 strictly after the
+          # timestamp of the start day and of the day after the (inclusive) end
+          # day. A missing Feb 29 starts the period on Mar 1 and ends it after
+          # Feb 28. Active iff the next end comes before the next start. If both
+          # coincide, the period covers the whole year (end is the day before
+          # start), unless it is Feb 29 to Feb 29 in a non-leap year, which is
+          # empty.
           #
-          # Comfort: ranges of the day before t (they may still run), t's day
-          # and the following 7 days (day 7 is t's weekday next week), start
-          # inclusive, end exclusive. An end at or before the start (by wall
+          # Comfort: ranges of the day before (they may still run), the day
+          # itself and the following 7 days (day 7 is the same weekday next
+          # week), start inclusive, end exclusive. An end at or before the start (by wall
           # clock) is on the next day, so 00:00-00:00 and 08:00-08:00 are 24 h.
           # A range that is empty after a DST change (e.g. 02:30-03:15 on the
           # night the clocks go forward) never activates Comfort, but its start
@@ -259,63 +260,63 @@ actions:
           #
           # Off beats Comfort beats Eco.
           schedule: >
-            {%- macro local_ts(t, hms, days) -%}
-            {%- set p = (hms ~ ':0:0').split(':') | map('int') | list -%}
-            {{ ((t | as_datetime | as_local).replace(hour=p[0], minute=p[1], second=p[2], microsecond=0, fold=0) + timedelta(days=days)) | as_timestamp | int }}
+            {%- macro local_ts(timestamp, time_of_day, day_offset) -%}
+            {%- set time_parts = (time_of_day ~ ':0:0').split(':') | map('int') | list -%}
+            {{ ((timestamp | as_datetime | as_local).replace(hour=time_parts[0], minute=time_parts[1], second=time_parts[2], microsecond=0, fold=0) + timedelta(days=day_offset)) | as_timestamp | int }}
             {%- endmacro -%}
-            {%- macro off_boundary(t, date, is_end) -%}
-            {%- set md = date.split('-')[1:] | map('int') | list -%}
-            {%- set base = (t | as_datetime | as_local).replace(hour=0, minute=0, second=0, microsecond=0, fold=0) -%}
-            {%- set ns = namespace(ts=[]) -%}
-            {%- for y in [base.year, base.year + 1] -%}
-              {%- set leap = (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 -%}
-              {%- if md == [2, 29] and (is_end or not leap) -%}
-                {%- set b = base.replace(year=y, month=3, day=1) -%}
+            {%- macro off_boundary(timestamp, date, is_end) -%}
+            {%- set month_day = date.split('-')[1:] | map('int') | list -%}
+            {%- set day_start = (timestamp | as_datetime | as_local).replace(hour=0, minute=0, second=0, microsecond=0, fold=0) -%}
+            {%- set ns = namespace(boundaries=[]) -%}
+            {%- for year in [day_start.year, day_start.year + 1] -%}
+              {%- set is_leap_year = (year % 4 == 0 and year % 100 != 0) or year % 400 == 0 -%}
+              {%- if month_day == [2, 29] and (is_end or not is_leap_year) -%}
+                {%- set boundary = day_start.replace(year=year, month=3, day=1) -%}
               {%- else -%}
-                {%- set b = base.replace(year=y, month=md[0], day=md[1]) + timedelta(days=1 if is_end else 0) -%}
+                {%- set boundary = day_start.replace(year=year, month=month_day[0], day=month_day[1]) + timedelta(days=1 if is_end else 0) -%}
               {%- endif -%}
-              {%- set ns.ts = ns.ts + [b | as_timestamp | int] -%}
+              {%- set ns.boundaries = ns.boundaries + [boundary | as_timestamp | int] -%}
             {%- endfor -%}
-            {{ ns.ts | select('>', t) | min }}
+            {{ ns.boundaries | select('>', timestamp) | min }}
             {%- endmacro -%}
-            {%- macro resolve(t) -%}
-            {%- set ns = namespace(off_active=false, candidates=[], ranges=[], starts=[], block_end=t) -%}
+            {%- macro resolve(timestamp) -%}
+            {%- set ns = namespace(off_active=false, candidates=[], ranges=[], starts=[], block_end=timestamp) -%}
             {%- if off_start is string and off_start != '' and off_end is string and off_end != '' -%}
-              {%- set next_start = off_boundary(t, off_start, false) | int -%}
-              {%- set next_end = off_boundary(t, off_end, true) | int -%}
+              {%- set next_start = off_boundary(timestamp, off_start, false) | int -%}
+              {%- set next_end = off_boundary(timestamp, off_end, true) | int -%}
               {%- set whole_year = next_end == next_start and off_start.split('-')[1:] != off_end.split('-')[1:] -%}
               {%- set ns.off_active = next_end < next_start or whole_year -%}
               {%- set ns.candidates = ns.candidates + [[next_start, next_end] | min] -%}
             {%- endif -%}
-            {%- for d in range(-1, 8) -%}
-              {%- set weekday = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][((t | as_datetime | as_local) + timedelta(days=d)).weekday()] -%}
-              {%- for item in weekday_schedules[weekday] -%}
-                {%- set s = local_ts(t, item.start, d) | int -%}
-                {%- set crosses = ((item.end ~ ':0:0').split(':')[:3] | map('int') | list) <= ((item.start ~ ':0:0').split(':')[:3] | map('int') | list) -%}
-                {%- set e = local_ts(t, item.end, d + (1 if crosses else 0)) | int -%}
-                {%- if e > s -%}
-                  {%- set ns.ranges = ns.ranges + [[s, e]] -%}
+            {%- for day_offset in range(-1, 8) -%}
+              {%- set weekday = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][((timestamp | as_datetime | as_local) + timedelta(days=day_offset)).weekday()] -%}
+              {%- for entry in weekday_schedules[weekday] -%}
+                {%- set range_start = local_ts(timestamp, entry.start, day_offset) | int -%}
+                {%- set crosses_midnight = ((entry.end ~ ':0:0').split(':')[:3] | map('int') | list) <= ((entry.start ~ ':0:0').split(':')[:3] | map('int') | list) -%}
+                {%- set range_end = local_ts(timestamp, entry.end, day_offset + (1 if crosses_midnight else 0)) | int -%}
+                {%- if range_end > range_start -%}
+                  {%- set ns.ranges = ns.ranges + [[range_start, range_end]] -%}
                 {%- endif -%}
-                {%- if s > t -%}
-                  {%- set ns.starts = ns.starts + [s] -%}
+                {%- if range_start > timestamp -%}
+                  {%- set ns.starts = ns.starts + [range_start] -%}
                 {%- endif -%}
               {%- endfor -%}
             {%- endfor -%}
-            {%- for r in ns.ranges | sort -%}
-              {%- if r[0] <= ns.block_end and r[1] > ns.block_end -%}
-                {%- set ns.block_end = r[1] -%}
+            {%- for comfort_range in ns.ranges | sort -%}
+              {%- if comfort_range[0] <= ns.block_end and comfort_range[1] > ns.block_end -%}
+                {%- set ns.block_end = comfort_range[1] -%}
               {%- endif -%}
             {%- endfor -%}
             {%- if ns.off_active -%}
               {%- set mode = 'Off' -%}
-            {%- elif ns.block_end > t -%}
+            {%- elif ns.block_end > timestamp -%}
               {%- set mode = 'Comfort' -%}
               {%- set ns.candidates = ns.candidates + [ns.block_end] -%}
             {%- else -%}
               {%- set mode = 'Eco' -%}
               {%- set ns.candidates = ns.candidates + ns.starts -%}
             {%- endif -%}
-            {{ mode }} {{ ns.candidates | select('>', t) | min | default(0) }}
+            {{ mode }} {{ ns.candidates | select('>', timestamp) | min | default(0) }}
             {%- endmacro -%}
             {%- set current = resolve(now_ts).split() -%}
             {%- set previous = resolve(as_timestamp(states[state_helper].last_changed, now_ts) | int).split() -%}

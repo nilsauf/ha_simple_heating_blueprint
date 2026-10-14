@@ -197,8 +197,8 @@ that is Comfort around the clock is re-evaluated after 8 days). If there is
 no next change (no Comfort ranges and no heating-off period), the timer stays
 idle until Home Assistant starts or the automation is reloaded.
 
-The whole evaluation is one template (`resolve(t)`) that depends only on the
-timestamp it is given. It is evaluated for now and for the moment the
+The whole evaluation is one template (`resolve(timestamp)`) that depends
+only on the timestamp it is given. It is evaluated for now and for the moment the
 `input_select` last changed; comparing the two decides whether the schedule
 actually changed and the `input_select` must be set.
 
