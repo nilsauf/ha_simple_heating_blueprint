@@ -25,10 +25,12 @@ The heating system is controlled indirectly via an `input_select` helper with th
 - **Off** → Heating completely disabled
 
 The automation ensures **one-way synchronization**:
+
 - Changes to the `input_select` immediately update the thermostat
 - Scheduled logic updates the `input_select`, not the thermostat directly
 
 This separation allows:
+
 - Manual overrides
 - External automations or UI controls
 - Easy debugging
@@ -44,6 +46,7 @@ Instead of using time or time_pattern triggers, this blueprint uses a **single t
 - The timer duration is dynamically computed
 
 Advantages:
+
 - No polling
 - Minimal triggers
 - Exact transitions, even across midnight
@@ -67,6 +70,7 @@ Advantages:
 - Overlapping or adjacent ranges are merged into one Comfort block
 
 Example logic:
+
 - 06:00–08:00 → Comfort
 - 08:00–17:00 → Eco
 - 17:00–22:00 → Comfort
@@ -108,7 +112,7 @@ Example logic:
 ### Required Entities
 
 | Input | Description |
-|-----|------------|
+| ----- | ------------ |
 | `thermostat` | Climate entity to control |
 | `state_helper` | `input_select` with options: `Comfort`, `Eco`, `Off` |
 | `plan_timer` | Timer entity used for scheduling |
@@ -116,14 +120,14 @@ Example logic:
 ### Temperatures
 
 | Input | Description |
-|-----|------------|
+| ----- | ------------ |
 | `heat_temp` | Target temperature for Comfort mode |
 | `eco_temp` | Target temperature for Eco mode |
 
 ### Heating-Free Period
 
 | Input | Description |
-|-----|------------|
+| ----- | ------------ |
 | `off_start` | Start date of heating-off period (MM-DD used) |
 | `off_end` | End date of heating-off period (MM-DD used) |
 
@@ -132,6 +136,7 @@ Both dates are optional. Leave either empty to disable the heating-off period.
 ### Weekly Schedules
 
 Each weekday accepts:
+
 - A list of `{ start, end }` time objects
 - Zero or more entries
 - Multiple Comfort windows per day
