@@ -143,6 +143,36 @@ Each weekday accepts:
 
 ---
 
+## Dashboard Card
+
+[`thermostat_card.yaml`](thermostat_card.yaml) contains an example thermostat
+card with two extra rows:
+
+- **Schedule on/off**: pauses or starts the `plan_timer`. Switching it back
+  on recalculates the schedule, so edits made while it was paused take effect
+- **Next transition**: the middle button shows when the next transition is due
+  - Tap: postpones it by 30 minutes.
+  - Double tap: resets it to the schedule (asks for confirmation)
+- **Mode**: selects `Eco`, `Comfort` or `Off` on the `state_helper`
+
+The schedule button labels and confirmation prompts are in German
+(`Automatik AN` / `Automatik AUS`).
+
+The card requires
+[Custom Card Features](https://github.com/Nerwyn/custom-card-features),
+which can be installed through [HACS](https://hacs.xyz/):
+
+1. Open HACS and search for **Custom Card Features**
+2. Download it and reload the browser
+3. Add a new card to your dashboard, switch to the YAML editor and paste the
+   contents of `thermostat_card.yaml`
+4. Replace the entity IDs with your own:
+   - `climate.tze200_hvaxb2tc_ts0601` → your `thermostat`
+   - `timer.wohnzimmer_thermo_plantimer` → your `plan_timer`
+   - `input_select.wohnzimmer_thermo_voreinstellung` → your `state_helper`
+
+---
+
 ## Internal Logic Breakdown
 
 ### Trigger Types

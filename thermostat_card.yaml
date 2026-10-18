@@ -1,0 +1,92 @@
+type: thermostat
+entity: climate.tze200_hvaxb2tc_ts0601
+features:
+  - type: custom:service-call
+    entries:
+      - type: selector
+        entity_id: timer.wohnzimmer_thermo_plantimer
+        options:
+          - entity_id: timer.wohnzimmer_thermo_plantimer
+            option: active
+            tap_action:
+              action: perform-action
+              perform_action: timer.start
+              target:
+                entity_id:
+                  - timer.wohnzimmer_thermo_plantimer
+              data: {}
+            label: Automatik AN
+            styles: ''
+            type: button
+          - entity_id: timer.wohnzimmer_thermo_plantimer
+            value_attribute: finishes_at
+            label: '{{ as_local(as_datetime(value)).strftime(''%d.%m.%y %H:%M'')}}'
+            type: button
+            double_tap_action:
+              action: perform-action
+              perform_action: timer.start
+              target:
+                entity_id:
+                  - timer.wohnzimmer_thermo_plantimer
+              confirmation:
+                text: 'Zurücksetzen? '
+            tap_action:
+              action: perform-action
+              perform_action: timer.change
+              target:
+                entity_id: timer.wohnzimmer_thermo_plantimer
+              data:
+                duration:
+                  hours: 0
+                  minutes: 30
+                  seconds: 0
+          - entity_id: timer.wohnzimmer_thermo_plantimer
+            option: paused
+            tap_action:
+              action: perform-action
+              perform_action: timer.pause
+              target:
+                entity_id:
+                  - timer.wohnzimmer_thermo_plantimer
+              data: {}
+              confirmation:
+                text: Wirklich die Automatik abschalten?
+            label: Automatik AUS
+            type: button
+        haptics: false
+  - type: custom:service-call
+    entries:
+      - type: selector
+        entity_id: input_select.wohnzimmer_thermo_voreinstellung
+        options:
+          - entity_id: input_select.wohnzimmer_thermo_voreinstellung
+            option: Eco
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              data:
+                option: Eco
+              target:
+                entity_id: input_select.wohnzimmer_thermo_voreinstellung
+            label: Eco
+          - entity_id: input_select.wohnzimmer_thermo_voreinstellung
+            option: Comfort
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              data:
+                option: Comfort
+              target:
+                entity_id: input_select.wohnzimmer_thermo_voreinstellung
+            label: Comfort
+          - entity_id: input_select.wohnzimmer_thermo_voreinstellung
+            option: 'Off'
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              data:
+                option: 'Off'
+              target:
+                entity_id: input_select.wohnzimmer_thermo_voreinstellung
+            label: 'Off'
+show_current_as_primary: false
