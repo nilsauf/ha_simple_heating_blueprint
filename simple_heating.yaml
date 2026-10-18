@@ -205,6 +205,43 @@ conditions:
             state: active
 
 actions:
+  ######################################################################
+  # Postpone (automation.trigger with variables: {postpone: true})
+  ######################################################################
+  # Moves the timer's end by override_duration, at most up to the end the
+  # timer was started for (timer.change can't go beyond the running duration).
+  # Impossible requests end the run without an error. A plain "Run" without
+  # the variable falls through and reapplies the schedule.
+  - if:
+      - "{{ trigger.platform is none and postpone | default(false) }}"
+    then:
+      - if:
+          - "{{ not is_state(plan_timer, 'active') }}"
+        then:
+          - stop: Postpone not possible, the plan timer is not running
+      - if:
+          - "{{ override_duration <= 0 }}"
+        then:
+          - stop: Postpone not possible, override_duration is 0
+      - variables:
+          # Seconds the end can move until the remaining time reaches the
+          # running duration. The timer's end is on a whole second, so
+          # flooring matches timer.change's own check.
+          room: >
+            {{ ((state_attr(plan_timer, 'duration') | as_timedelta).total_seconds()
+                - as_timestamp(state_attr(plan_timer, 'finishes_at'))
+                + as_timestamp(now())) | int }}
+      - if:
+          - "{{ room < 1 }}"
+        then:
+          - stop: Postpone not possible, the timer ends at its latest end
+      - action: timer.change
+        target:
+          entity_id: "{{ plan_timer }}"
+        data:
+          duration: "{{ [(override_duration * 60) | int, room] | min }}"
+      - stop: Postponed
+
   - variables:
       now_ts: "{{ now() | as_timestamp | int }}"
       # Mode resolver. resolve(timestamp) returns "<mode> <next_change_ts>"

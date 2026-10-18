@@ -104,9 +104,15 @@ Example logic:
   the latest at the next schedule change. Changing to `Off` or to the
   scheduled mode moves the timer back to the next schedule change. The timer
   is moved with `timer.change`, so its running duration stays and the
-  override can be postponed from the card (`timer.change` refuses to go
-  beyond the running duration). A paused timer is left alone and the override
-  has no time limit
+  override can be postponed (see Postponing). A paused timer is left alone
+  and the override has no time limit
+- Postponing: `automation.trigger` on this automation with
+  `variables: {postpone: true}` (e.g. the card's tap) moves the timer's end by
+  `override_duration`, at most up to the end the timer was started for,
+  normally the next schedule change (`timer.change` refuses to go beyond the
+  running duration). Without room, with a paused timer or with
+  `override_duration` at 0 nothing happens; the trace shows the reason. A
+  plain "Run" of the automation reapplies the schedule
 - Resetting the timer (`timer.start` on a running timer, e.g. the card's
   double tap) reapplies the schedule immediately
 - An automation reload with a running timer recalculates the timer and
@@ -170,9 +176,9 @@ card with two extra rows:
 - **Schedule on/off**: pauses or starts the `plan_timer`. Switching it back
   on recalculates the schedule, so edits made while it was paused take effect
 - **Next transition**: the middle button shows when the next transition is due
-  - Tap: postpones it by 30 minutes. This only works while the new end stays
-    within the timer's running duration, i.e. not beyond the schedule change
-    the timer was started for
+  - Tap: postpones it by `override_duration`, at most up to the schedule
+    change the timer was started for, so it only has an effect during a timed
+    override (see Manual Overrides). Requires `override_duration` > 0
   - Double tap: resets it to the schedule (asks for confirmation)
 - **Mode**: selects `Eco`, `Comfort` or `Off` on the `state_helper`
 
@@ -191,6 +197,8 @@ which can be installed through [HACS](https://hacs.xyz/):
    - `climate.tze200_hvaxb2tc_ts0601` → your `thermostat`
    - `timer.wohnzimmer_thermo_plantimer` → your `plan_timer`
    - `input_select.wohnzimmer_thermo_voreinstellung` → your `state_helper`
+   - `automation.thermostatplan_wohnzimmer` → the automation created from this
+     blueprint
 
 ---
 
@@ -219,6 +227,12 @@ which can be installed through [HACS](https://hacs.xyz/):
    - Set the `input_select` only if the scheduled mode differs from the
      scheduled mode at the time the `input_select` last changed
    - A paused timer is left alone
+
+6. **Postpone** (`automation.trigger` with `variables: {postpone: true}`)
+   - Move the running timer's end by `override_duration`, clamped to the
+     timer's running duration
+   - Stop without a change if the timer isn't running, there is no room or
+     `override_duration` is 0
 
 ---
 

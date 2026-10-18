@@ -32,14 +32,12 @@ features:
                 text: 'Zurücksetzen? '
             tap_action:
               action: perform-action
-              perform_action: timer.change
+              perform_action: automation.trigger
               target:
-                entity_id: timer.wohnzimmer_thermo_plantimer
+                entity_id: automation.thermostatplan_wohnzimmer
               data:
-                duration:
-                  hours: 0
-                  minutes: 30
-                  seconds: 0
+                variables:
+                  postpone: true
           - entity_id: timer.wohnzimmer_thermo_plantimer
             option: paused
             tap_action:
