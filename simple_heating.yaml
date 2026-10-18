@@ -21,9 +21,9 @@ blueprint:
       description: >
         Input select used to control the heating mode.
         Must contain the options: Comfort, Eco and Off.
-        Manual changes are applied immediately and kept until the
-        schedule's mode next changes. A Home Assistant restart reapplies
-        the schedule.
+        Manual changes are applied immediately and kept until the plan
+        timer finishes (see Manual Override Duration). A Home Assistant
+        restart reapplies the schedule.
       selector:
         entity:
           domain: input_select
@@ -37,6 +37,22 @@ blueprint:
       selector:
         entity:
           domain: timer
+    override_duration:
+      name: Manual Override Duration
+      description: >
+        Minutes a manual change to Comfort or Eco lasts, at the latest until
+        the schedule's mode next changes. The plan timer is shortened
+        accordingly, so the override can be postponed by adding time to the
+        timer. Choosing Off or the scheduled mode resets the timer to the
+        next schedule change. 0 disables this: overrides last until the timer
+        finishes.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 1440
+          step: 5
+          unit_of_measurement: min
     heat_temp:
       name: Heating Temperature (Comfort)
       description: Target temperature when Comfort mode is active.
@@ -126,6 +142,7 @@ variables:
   thermostat: !input thermostat
   state_helper: !input state_helper
   plan_timer: !input plan_timer
+  override_duration: !input override_duration
   heat_temp: !input heat_temp
   eco_temp: !input eco_temp
   off_start: !input off_start
@@ -188,6 +205,97 @@ conditions:
             state: active
 
 actions:
+  - variables:
+      now_ts: "{{ now() | as_timestamp | int }}"
+      # Mode resolver. resolve(timestamp) returns "<mode> <next_change_ts>"
+      # using only the given timestamp (never now()), so it can be evaluated
+      # for both now and the moment the state helper last changed. A
+      # next_change_ts of 0 means the mode never changes.
+      #
+      # Off period: boundaries are the next local 00:00 strictly after the
+      # timestamp of the start day and of the day after the (inclusive) end
+      # day. A missing Feb 29 starts the period on Mar 1 and ends it after
+      # Feb 28. Active iff the next end comes before the next start. If both
+      # coincide, the period covers the whole year (end is the day before
+      # start), unless it is Feb 29 to Feb 29 in a non-leap year, which is
+      # empty.
+      #
+      # Comfort: ranges of the day before (they may still run), the day
+      # itself and the following 7 days (day 7 is the same weekday next
+      # week), start inclusive, end exclusive. An end at or before the start (by wall
+      # clock) is on the next day, so 00:00-00:00 and 08:00-08:00 are 24 h.
+      # A range that is empty after a DST change (e.g. 02:30-03:15 on the
+      # night the clocks go forward) never activates Comfort, but its start
+      # stays a candidate, so a schedule with only such a range still has a
+      # next change.
+      # Overlapping or adjacent ranges are merged, also across days, so the
+      # next change while in Comfort is the end of the merged block and
+      # while in Eco the next Comfort start.
+      #
+      # Off beats Comfort beats Eco.
+      schedule: >
+        {%- macro local_ts(timestamp, time_of_day, day_offset) -%}
+        {%- set time_parts = (time_of_day ~ ':0:0').split(':') | map('int') | list -%}
+        {{ ((timestamp | as_datetime | as_local).replace(hour=time_parts[0], minute=time_parts[1], second=time_parts[2], microsecond=0, fold=0) + timedelta(days=day_offset)) | as_timestamp | int }}
+        {%- endmacro -%}
+        {%- macro off_boundary(timestamp, date, is_end) -%}
+        {%- set month_day = date.split('-')[1:] | map('int') | list -%}
+        {%- set day_start = (timestamp | as_datetime | as_local).replace(hour=0, minute=0, second=0, microsecond=0, fold=0) -%}
+        {%- set ns = namespace(boundaries=[]) -%}
+        {%- for year in [day_start.year, day_start.year + 1] -%}
+          {%- set is_leap_year = (year % 4 == 0 and year % 100 != 0) or year % 400 == 0 -%}
+          {%- if month_day == [2, 29] and (is_end or not is_leap_year) -%}
+            {%- set boundary = day_start.replace(year=year, month=3, day=1) -%}
+          {%- else -%}
+            {%- set boundary = day_start.replace(year=year, month=month_day[0], day=month_day[1]) + timedelta(days=1 if is_end else 0) -%}
+          {%- endif -%}
+          {%- set ns.boundaries = ns.boundaries + [boundary | as_timestamp | int] -%}
+        {%- endfor -%}
+        {{ ns.boundaries | select('>', timestamp) | min }}
+        {%- endmacro -%}
+        {%- macro resolve(timestamp) -%}
+        {%- set ns = namespace(off_active=false, candidates=[], ranges=[], starts=[], block_end=timestamp) -%}
+        {%- if off_start is string and off_start != '' and off_end is string and off_end != '' -%}
+          {%- set next_start = off_boundary(timestamp, off_start, false) | int -%}
+          {%- set next_end = off_boundary(timestamp, off_end, true) | int -%}
+          {%- set whole_year = next_end == next_start and off_start.split('-')[1:] != off_end.split('-')[1:] -%}
+          {%- set ns.off_active = next_end < next_start or whole_year -%}
+          {%- set ns.candidates = ns.candidates + [[next_start, next_end] | min] -%}
+        {%- endif -%}
+        {%- for day_offset in range(-1, 8) -%}
+          {%- set weekday = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][((timestamp | as_datetime | as_local) + timedelta(days=day_offset)).weekday()] -%}
+          {%- for entry in weekday_schedules[weekday] -%}
+            {%- set range_start = local_ts(timestamp, entry.start, day_offset) | int -%}
+            {%- set crosses_midnight = ((entry.end ~ ':0:0').split(':')[:3] | map('int') | list) <= ((entry.start ~ ':0:0').split(':')[:3] | map('int') | list) -%}
+            {%- set range_end = local_ts(timestamp, entry.end, day_offset + (1 if crosses_midnight else 0)) | int -%}
+            {%- if range_end > range_start -%}
+              {%- set ns.ranges = ns.ranges + [[range_start, range_end]] -%}
+            {%- endif -%}
+            {%- if range_start > timestamp -%}
+              {%- set ns.starts = ns.starts + [range_start] -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endfor -%}
+        {%- for comfort_range in ns.ranges | sort -%}
+          {%- if comfort_range[0] <= ns.block_end and comfort_range[1] > ns.block_end -%}
+            {%- set ns.block_end = comfort_range[1] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- if ns.off_active -%}
+          {%- set mode = 'Off' -%}
+        {%- elif ns.block_end > timestamp -%}
+          {%- set mode = 'Comfort' -%}
+          {%- set ns.candidates = ns.candidates + [ns.block_end] -%}
+        {%- else -%}
+          {%- set mode = 'Eco' -%}
+          {%- set ns.candidates = ns.candidates + ns.starts -%}
+        {%- endif -%}
+        {{ mode }} {{ ns.candidates | select('>', timestamp) | min | default(0) }}
+        {%- endmacro -%}
+        {%- set current = resolve(now_ts).split() -%}
+        {%- set previous = resolve(as_timestamp(states[state_helper].last_changed, now_ts) | int).split() -%}
+        {{ {'mode': current[0], 'previous_mode': previous[0], 'next_change_ts': current[1] | int} }}
+
   ######################################################################
   # State helper → control thermostat
   ######################################################################
@@ -226,105 +334,79 @@ actions:
                   entity_id: "{{ thermostat }}"
                 data:
                   temperature: "{{ desired_temp }}"
+      # Timed override: move the running timer to the override's end with
+      # timer.change, which keeps the timer's running duration, so the end can
+      # be postponed later (timer.change can't go beyond the running duration).
+      # The automation's own writes always hit the second case and are no-ops.
+      - if:
+          - "{{ override_duration > 0 and is_state(plan_timer, 'active') }}"
+        then:
+          - variables:
+              # Timestamp the timer finishes at when started for the next
+              # schedule change, 0 if there is none.
+              schedule_end_ts: >
+                {{ schedule.next_change_ts + 1 if schedule.next_change_ts > 0 else 0 }}
+              # Comfort or Eco against the schedule ends after
+              # override_duration, at the latest at the next schedule change.
+              # Off and the scheduled mode get the schedule's timer.
+              target_ts: >
+                {%- if mode in ['Comfort', 'Eco'] and mode != schedule.mode -%}
+                  {{ ([now_ts + override_duration * 60, schedule_end_ts] | reject('==', 0) | min) | int }}
+                {%- else -%}
+                  {{ schedule_end_ts }}
+                {%- endif -%}
+              finishes_ts: "{{ as_timestamp(state_attr(plan_timer, 'finishes_at')) | round | int }}"
+              running_duration: "{{ (state_attr(plan_timer, 'duration') | as_timedelta).total_seconds() | int }}"
+          - choose:
+              - conditions:
+                  - "{{ target_ts == 0 }}"
+                sequence:
+                  - action: timer.cancel
+                    target:
+                      entity_id: "{{ plan_timer }}"
+              # Not reachable with timer.change (e.g. the timer was postponed
+              # past an earlier schedule change): start it anew from idle, so
+              # no timer.restarted fires, for the next schedule change.
+              - conditions:
+                  - "{{ target_ts - now_ts > running_duration }}"
+                sequence:
+                  - action: timer.cancel
+                    target:
+                      entity_id: "{{ plan_timer }}"
+                  - action: timer.start
+                    target:
+                      entity_id: "{{ plan_timer }}"
+                    data:
+                      duration: "{{ [target_ts, schedule_end_ts] | max - now_ts }}"
+                  - if:
+                      - "{{ target_ts < schedule_end_ts }}"
+                    then:
+                      - action: timer.change
+                        target:
+                          entity_id: "{{ plan_timer }}"
+                        data:
+                          duration: "{{ target_ts - schedule_end_ts }}"
+            default:
+              - if:
+                  - "{{ (target_ts - finishes_ts) | abs > 1 }}"
+                then:
+                  - action: timer.change
+                    target:
+                      entity_id: "{{ plan_timer }}"
+                    data:
+                      duration: "{{ target_ts - finishes_ts }}"
 
     ######################################################################
     # Schedule → set state helper
     ######################################################################
     else:
       - variables:
-          now_ts: "{{ now() | as_timestamp | int }}"
-          # Mode resolver. resolve(timestamp) returns "<mode> <next_change_ts>"
-          # using only the given timestamp (never now()), so it can be evaluated
-          # for both now and the moment the state helper last changed. A
-          # next_change_ts of 0 means the mode never changes.
-          #
-          # Off period: boundaries are the next local 00:00 strictly after the
-          # timestamp of the start day and of the day after the (inclusive) end
-          # day. A missing Feb 29 starts the period on Mar 1 and ends it after
-          # Feb 28. Active iff the next end comes before the next start. If both
-          # coincide, the period covers the whole year (end is the day before
-          # start), unless it is Feb 29 to Feb 29 in a non-leap year, which is
-          # empty.
-          #
-          # Comfort: ranges of the day before (they may still run), the day
-          # itself and the following 7 days (day 7 is the same weekday next
-          # week), start inclusive, end exclusive. An end at or before the start (by wall
-          # clock) is on the next day, so 00:00-00:00 and 08:00-08:00 are 24 h.
-          # A range that is empty after a DST change (e.g. 02:30-03:15 on the
-          # night the clocks go forward) never activates Comfort, but its start
-          # stays a candidate, so a schedule with only such a range still has a
-          # next change.
-          # Overlapping or adjacent ranges are merged, also across days, so the
-          # next change while in Comfort is the end of the merged block and
-          # while in Eco the next Comfort start.
-          #
-          # Off beats Comfort beats Eco.
-          schedule: >
-            {%- macro local_ts(timestamp, time_of_day, day_offset) -%}
-            {%- set time_parts = (time_of_day ~ ':0:0').split(':') | map('int') | list -%}
-            {{ ((timestamp | as_datetime | as_local).replace(hour=time_parts[0], minute=time_parts[1], second=time_parts[2], microsecond=0, fold=0) + timedelta(days=day_offset)) | as_timestamp | int }}
-            {%- endmacro -%}
-            {%- macro off_boundary(timestamp, date, is_end) -%}
-            {%- set month_day = date.split('-')[1:] | map('int') | list -%}
-            {%- set day_start = (timestamp | as_datetime | as_local).replace(hour=0, minute=0, second=0, microsecond=0, fold=0) -%}
-            {%- set ns = namespace(boundaries=[]) -%}
-            {%- for year in [day_start.year, day_start.year + 1] -%}
-              {%- set is_leap_year = (year % 4 == 0 and year % 100 != 0) or year % 400 == 0 -%}
-              {%- if month_day == [2, 29] and (is_end or not is_leap_year) -%}
-                {%- set boundary = day_start.replace(year=year, month=3, day=1) -%}
-              {%- else -%}
-                {%- set boundary = day_start.replace(year=year, month=month_day[0], day=month_day[1]) + timedelta(days=1 if is_end else 0) -%}
-              {%- endif -%}
-              {%- set ns.boundaries = ns.boundaries + [boundary | as_timestamp | int] -%}
-            {%- endfor -%}
-            {{ ns.boundaries | select('>', timestamp) | min }}
-            {%- endmacro -%}
-            {%- macro resolve(timestamp) -%}
-            {%- set ns = namespace(off_active=false, candidates=[], ranges=[], starts=[], block_end=timestamp) -%}
-            {%- if off_start is string and off_start != '' and off_end is string and off_end != '' -%}
-              {%- set next_start = off_boundary(timestamp, off_start, false) | int -%}
-              {%- set next_end = off_boundary(timestamp, off_end, true) | int -%}
-              {%- set whole_year = next_end == next_start and off_start.split('-')[1:] != off_end.split('-')[1:] -%}
-              {%- set ns.off_active = next_end < next_start or whole_year -%}
-              {%- set ns.candidates = ns.candidates + [[next_start, next_end] | min] -%}
-            {%- endif -%}
-            {%- for day_offset in range(-1, 8) -%}
-              {%- set weekday = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][((timestamp | as_datetime | as_local) + timedelta(days=day_offset)).weekday()] -%}
-              {%- for entry in weekday_schedules[weekday] -%}
-                {%- set range_start = local_ts(timestamp, entry.start, day_offset) | int -%}
-                {%- set crosses_midnight = ((entry.end ~ ':0:0').split(':')[:3] | map('int') | list) <= ((entry.start ~ ':0:0').split(':')[:3] | map('int') | list) -%}
-                {%- set range_end = local_ts(timestamp, entry.end, day_offset + (1 if crosses_midnight else 0)) | int -%}
-                {%- if range_end > range_start -%}
-                  {%- set ns.ranges = ns.ranges + [[range_start, range_end]] -%}
-                {%- endif -%}
-                {%- if range_start > timestamp -%}
-                  {%- set ns.starts = ns.starts + [range_start] -%}
-                {%- endif -%}
-              {%- endfor -%}
-            {%- endfor -%}
-            {%- for comfort_range in ns.ranges | sort -%}
-              {%- if comfort_range[0] <= ns.block_end and comfort_range[1] > ns.block_end -%}
-                {%- set ns.block_end = comfort_range[1] -%}
-              {%- endif -%}
-            {%- endfor -%}
-            {%- if ns.off_active -%}
-              {%- set mode = 'Off' -%}
-            {%- elif ns.block_end > timestamp -%}
-              {%- set mode = 'Comfort' -%}
-              {%- set ns.candidates = ns.candidates + [ns.block_end] -%}
-            {%- else -%}
-              {%- set mode = 'Eco' -%}
-              {%- set ns.candidates = ns.candidates + ns.starts -%}
-            {%- endif -%}
-            {{ mode }} {{ ns.candidates | select('>', timestamp) | min | default(0) }}
-            {%- endmacro -%}
-            {%- set current = resolve(now_ts).split() -%}
-            {%- set previous = resolve(as_timestamp(states[state_helper].last_changed, now_ts) | int).split() -%}
-            {{ {'mode': current[0], 'previous_mode': previous[0], 'next_change_ts': current[1] | int} }}
-          # The timer chain was broken (HA start or reload with an idle timer):
-          # reapply the schedule unconditionally.
+          # Reapply the schedule unconditionally when the timer finished (this
+          # ends any override), was reset by the user, or its chain was broken
+          # (HA start or reload with an idle timer).
           force_write: >
-            {{ trigger.id in ['ha_start', 'automation_reloaded'] and is_state(plan_timer, 'idle') }}
+            {{ trigger.id in ['timer_finished', 'timer_restarted']
+               or (trigger.id in ['ha_start', 'automation_reloaded'] and is_state(plan_timer, 'idle')) }}
 
       - action: timer.cancel
         target:
@@ -339,8 +421,9 @@ actions:
               entity_id: "{{ plan_timer }}"
             data:
               duration: "{{ schedule.next_change_ts - now_ts + 1 }}"
-      # Only write when the schedule's mode changed since the state helper last
-      # changed, so manual overrides last until the next real mode change.
+      # Otherwise (reload with a running timer) only write when the schedule's
+      # mode changed since the state helper last changed, so a manual override
+      # survives a reload.
       - if:
           - "{{ force_write or schedule.mode != schedule.previous_mode }}"
         then:

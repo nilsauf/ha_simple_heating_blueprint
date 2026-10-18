@@ -96,9 +96,22 @@ Example logic:
 - Changing the `input_select` manually:
   - Immediately updates the thermostat
   - Does **not** break the schedule
-- An override lasts until the schedule's mode next changes. Re-evaluations
-  that don't change the scheduled mode (e.g. an automation reload with a
-  running timer) leave the `input_select` untouched
+- An override lasts until the `plan_timer` finishes, which is normally the
+  schedule's next mode change. When the timer finishes, the scheduled mode is
+  always written
+- With `override_duration` set, changing to `Comfort` or `Eco` against the
+  schedule moves the timer so the override ends after that many minutes, at
+  the latest at the next schedule change. Changing to `Off` or to the
+  scheduled mode moves the timer back to the next schedule change. The timer
+  is moved with `timer.change`, so its running duration stays and the
+  override can be postponed from the card (`timer.change` refuses to go
+  beyond the running duration). A paused timer is left alone and the override
+  has no time limit
+- Resetting the timer (`timer.start` on a running timer, e.g. the card's
+  double tap) reapplies the schedule immediately
+- An automation reload with a running timer recalculates the timer and
+  leaves the `input_select` untouched unless the scheduled mode changed, so
+  an override survives it, but loses its shortened end
 - A Home Assistant restart with an idle timer reapplies the schedule, so an
   override does not survive it
 - Changing the thermostat directly is not corrected: the thermostat is only
@@ -116,6 +129,12 @@ Example logic:
 | `thermostat` | Climate entity to control |
 | `state_helper` | `input_select` with options: `Comfort`, `Eco`, `Off` |
 | `plan_timer` | Timer entity used for scheduling |
+
+### Manual Override
+
+| Input | Description |
+| ----- | ------------ |
+| `override_duration` | Minutes a manual `Comfort`/`Eco` change lasts (0 = until the timer finishes) |
 
 ### Temperatures
 
@@ -151,7 +170,9 @@ card with two extra rows:
 - **Schedule on/off**: pauses or starts the `plan_timer`. Switching it back
   on recalculates the schedule, so edits made while it was paused take effect
 - **Next transition**: the middle button shows when the next transition is due
-  - Tap: postpones it by 30 minutes.
+  - Tap: postpones it by 30 minutes. This only works while the new end stays
+    within the timer's running duration, i.e. not beyond the schedule change
+    the timer was started for
   - Double tap: resets it to the schedule (asks for confirmation)
 - **Mode**: selects `Eco`, `Comfort` or `Off` on the `state_helper`
 
@@ -179,15 +200,15 @@ which can be installed through [HACS](https://hacs.xyz/):
 
 1. **Timer finished**
    - Recalculate desired mode and schedule next transition
-   - Set the `input_select` only if the scheduled mode differs from the
-     scheduled mode at the time the `input_select` last changed
+   - Always set the `input_select`, which ends any manual override
 
 2. **Timer restarted** (e.g. `timer.start` called on a running timer)
    - Same as timer finished
 
 3. **State helper changed**
    - Immediate thermostat update
-   - No timer recalculation
+   - With `override_duration` set and a running timer, move the timer to the
+     override's end (see Manual Overrides); otherwise no timer change
 
 4. **Home Assistant start / automation reloaded with an idle timer**
    - The timer chain is broken (e.g. not restored, or expired while HA was down)
@@ -195,7 +216,8 @@ which can be installed through [HACS](https://hacs.xyz/):
 
 5. **Automation reloaded with a running timer**
    - Recalculate and reschedule, so schedule edits take effect on the timer
-   - Set the `input_select` only under the same rule as timer finished
+   - Set the `input_select` only if the scheduled mode differs from the
+     scheduled mode at the time the `input_select` last changed
    - A paused timer is left alone
 
 ---
@@ -235,7 +257,7 @@ idle until Home Assistant starts or the automation is reloaded.
 The whole evaluation is one template (`resolve(timestamp)`) that depends
 only on the timestamp it is given. It is evaluated for now and for the moment the
 `input_select` last changed; comparing the two decides whether the schedule
-actually changed and the `input_select` must be set.
+actually changed and the `input_select` must be set on a reload.
 
 ---
 
